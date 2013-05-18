@@ -1,0 +1,7 @@
+find_path(LIBBOBCAT_INCLUDE_DIR bobcat/readlinestream)
+find_library(LIBBOBCAT_LIBRARY NAMES bobcat)
+
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(LIBBOBCAT DEFAULT_MSG LIBBOBCAT_LIBRARY LIBBOBCAT_INCLUDE_DIR)
+
+mark_as_advanced(LIBBOBCAT_INCLUDE_DIR LIBBOBCAT_LIBRARY)
