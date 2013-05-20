@@ -3,7 +3,8 @@
 
 find_package(Boost REQUIRED)
 
-# TODO: PHG also needs Clang's built-in headers. If they aren't installed or a different version of LLVM/Clang is installed they'll need to embedded I guess. Have to think more about it..
+# NOTE: PseudoHeaderGen also needs Clang's built-in headers.
+# That's why the tool needs to be linked rather than copied to work in the build folder, so the path to the headers remains valid.
 # You can always use -isystem /path/to/llvmbinarybuild/lib/clang/3.x/include
 
 # TODO: check if PATH_TO_LLVM_SOURCE is empty/correct

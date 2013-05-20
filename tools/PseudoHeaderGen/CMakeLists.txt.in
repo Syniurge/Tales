@@ -1,9 +1,6 @@
 set(LLVM_LINK_COMPONENTS support)
 set(LLVM_USED_LIBS clangTooling clangBasic clangAST)
 
-find_package(Boost REQUIRED)
-include_directories(${Boost_INCLUDE_DIRS})
-
 add_definitions(-std=c++11)
 
 add_clang_executable(TalesPseudoHeaderGen

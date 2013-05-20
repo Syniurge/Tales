@@ -23,7 +23,6 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTConsumer.h"
-#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Tooling/Tooling.h"
@@ -76,110 +75,49 @@ struct FolderParm {
 	// 1st command line parameter, output folder
 	SmallString<256> outputFolder;
 
-	// 2nd command line parameter, will only process declarations that are inside this folder
-	SmallString<256> inputFolder;
+	// 2nd command line parameter, will only process declarations that are inside that file or folder
+	SmallString<256> inputConstraint;
 
-	FolderParm(int argc, const char **argv) : outputFolder(argv[1]), inputFolder(argv[2]) {
+	StringRef inputFolder;
+
+	FolderParm(int argc, const char **argv) : outputFolder(argv[1]), inputConstraint(argv[2]) {
 		make_absolute(outputFolder);
-		make_absolute(inputFolder);
+		make_absolute(inputConstraint);
 
-		bool isDirectory; is_directory(Twine(inputFolder), isDirectory);
-		if (!isDirectory) {
-			errs() << "Second argument(input folder) must be a folder!\n";
+		bool isDirectory; is_directory(Twine(outputFolder), isDirectory);
+		if (exists(Twine(outputFolder)) && !isDirectory) {
+			errs() << "First argument(output folder) exists but isn't a folder!\n";
 			exit(2); // FIXME
 		}
+
+		if (!exists(Twine(inputConstraint))) {
+			errs() << "Second argument(input constraint) must be an existing file or folder!\n";
+			exit(2);
+		}
+
+		is_directory(Twine(inputConstraint), isDirectory);
+		inputFolder = isDirectory ? inputConstraint.str() : parent_path(inputConstraint);
 	}
 
-	inline bool IsInsideInputFolder(StringRef filename) {
-		return inputFolder.compare(filename.substr(0, inputFolder.size())) == 0;
+	inline bool IsInsideInputConstraint(StringRef filename) const {
+		return inputConstraint.compare(filename.substr(0, inputConstraint.size())) == 0;
 	}
 };
 
-
-class PHGVisitor;
-class PHGConsumer;
-
-class PHGVisitor : public RecursiveASTVisitor<PHGVisitor> {
-	friend PHGConsumer;
-public:
-	explicit PHGVisitor(ASTContext *Context, PHGConsumer* PHGContext) : Context(Context), PHGContext(PHGContext) {}
-
-	bool TraverseNamespaceDecl(NamespaceDecl* D);
-
-private:
-	ASTContext *Context;
-	PHGConsumer* PHGContext;
-
-	inline bool ShouldTraverseDecl(Decl* D);
-};
-
-class PHGConsumer : public FolderParm, public ASTConsumer {
-	friend PHGVisitor;
-public:
-	explicit PHGConsumer(ASTContext *Context, int argc, const char **argv) : FolderParm(argc, argv), outputFile(nullptr), Visitor(Context, this) {}
-	virtual ~PHGConsumer() {
-		if (outputFile != nullptr)
-			delete outputFile;
-	}
-
-	inline void ChangeOutputFileIfNeeded (StringRef inputFilenameNew) {
-		SmallString<256> inputFilenameNewAbsolute(inputFilenameNew);
-		make_absolute(inputFilenameNewAbsolute);
-
-		if (inputFilename.compare(inputFilenameNewAbsolute) == 0)
-			return;
-
-		if (outputFile != nullptr)
-			delete outputFile;
-
-		inputFilename = inputFilenameNewAbsolute;
-
-		SmallString<256> outputFilename(outputFolder);
-		naive_uncomplete(inputFilename, inputFolder, outputFilename);
-
-        std::string ErrorInfo;
-		outputFile = new raw_fd_ostream(outputFilename.c_str(), ErrorInfo, raw_fd_ostream::F_Binary);
-	}
-
-	virtual void HandleTranslationUnit(ASTContext &Context) {
-		Visitor.TraverseDecl(Context.getTranslationUnitDecl());
-	}
-
-    inline void Print(Decl* D);
-
-    raw_fd_ostream* outputFile;  // FIXME: friend doesn't work?
-
-private:
-	PHGVisitor Visitor;
-
-	// Input file being parsed
-	SmallString<256> inputFilename;
-};
 
 #include "DeclPrinter.hpp" // Customized DeclPrinter.cpp, had to be renamed to .hpp for llvm_check_source_file_list
 
-inline bool PHGVisitor::ShouldTraverseDecl(Decl* D) {
-	PresumedLoc PLoc = Context->getSourceManager().getPresumedLoc(D->getLocation());
-	if (PLoc.isInvalid() || !PHGContext->IsInsideInputFolder(PLoc.getFilename()))
-		return false;
+class PHGConsumer : public FolderParm, public ASTConsumer {
+public:
+	explicit PHGConsumer(ASTContext *Context, int argc, const char **argv) : FolderParm(argc, argv), Visitor(Context, *this) {}
 
-	PHGContext->ChangeOutputFileIfNeeded(PLoc.getFilename());
+	virtual void HandleTranslationUnit(ASTContext &Context) {
+		Visitor.Visit(const_cast<TranslationUnitDecl*>(Context.getTranslationUnitDecl()));
+	}
 
-	return true;
-}
-
-inline void PHGConsumer::Print(Decl* D) {
-	PHGDeclPrinter Printer(outputFile, Visitor.Context->getPrintingPolicy());
-	Printer.Visit(const_cast<Decl*>(D));
-}
-
-bool PHGVisitor::TraverseNamespaceDecl(NamespaceDecl* D) {
-	if (ShouldTraverseDecl(D))
-		PHGContext->Print(D);
-
-	return true;
-}
-
+private:
+	PHGDeclPrinter Visitor;
+};
 
 class PHGAction : public ASTFrontendAction {
 public:
@@ -206,16 +144,17 @@ private:
 };
 
 
-// CommonOptionsParser declares HelpMessage with a description of the common
-// command-line options related to the compilation database and input files.
+// CommonOptionsParser declares HelpMessage with a description of the common command-line options related to the compilation database and input files.
 // It's nice to have this help message in all tools.
 static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 
-static cl::extrahelp MoreHelp("\nPseudoHeaderGen creates C++-like headers (accessors may be added later, hence they won't be pure C++ anymore) that mirrors files referenced in the translation unit and which are inside the input folder 'constraint'. Those C++-like headers are to be consumed by another tool, TalesPH2LLVMBitcode to produce the symbol table for a Tales application.\n\nAll comments are removed, and the output is 'standardized' so you can quickly comment out lines (it's better to leave commented instead of removing them, so that the pseudo-headers can be automatically updated later if the headers of the library to bind are modified.");
+static cl::extrahelp MoreHelp("PseudoHeaderGen creates C++-like headers (accessors may be added later, hence they won't be pure C++ anymore) that mirrors files that are \nreferenced in the translation unit and are inside the input 'constraint' (which can be a folder). Those C++-like headers are to be consumed \nby another tool, TalesPH2LLVMBitcode to produce the symbol table for a Tales application.\n\nAll comments are removed, and the output is 'standardized' so you can quickly comment out lines. It's better to leave commented instead of \nremoving them, so that the pseudo-headers can be automatically updated later if the headers of the library to bind are modified.\n");
 
 int main(int argc, const char **argv) {
 	if (argc < 4) {
-		outs() << "Usage: TalesPseudoHeaderGen <output folder> <input folder constraint> <source files>... -- <clang command line>...\n";
+// 		cl::PrintHelpMessage(true);
+		outs() << MoreHelp.morehelp << "\n";
+		outs() << "Usage: TalesPseudoHeaderGen <output folder> <input constraint> <source files>... -- <Clang command line options>...\n";
 		return 1;
 	}
 

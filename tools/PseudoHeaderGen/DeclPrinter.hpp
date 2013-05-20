@@ -1,5 +1,5 @@
 /*
- * Customized DeclPrinter class for PseudoHeaderGen
+ * Customized DeclPrinter class for PseudoHeaderGen.
  */
 
 //===--- DeclPrinter.cpp - Printing implementation for Decl ASTs ----------===//
@@ -25,13 +25,24 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/Basic/Module.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
+using namespace llvm;
+using namespace sys::fs;
+using namespace sys::path;
 using namespace clang;
 
 namespace {
   class PHGDeclPrinter : public DeclVisitor<PHGDeclPrinter> {
-    raw_ostream* _Out;
-    inline raw_ostream& Out() { return *_Out; }
+    ASTContext *Context;
+    FolderParm& folderParm;
+
+    SmallString<256> inputFilename;
+    raw_fd_ostream* outputFile;
+    raw_ostream* tOut;
+    inline raw_ostream& Out() { return tOut ? *tOut : *outputFile; }
+
     PrintingPolicy Policy;
     unsigned Indentation;
     bool PrintInstantiation;
@@ -43,11 +54,17 @@ namespace {
     void Print(AccessSpecifier AS);
 
   public:
-    PHGDeclPrinter(raw_ostream* _Out,
-                const PrintingPolicy &Policy,
+    PHGDeclPrinter(ASTContext *Context,
+                FolderParm& folderParm,
                 unsigned Indentation = 0, bool PrintInstantiation = false)
-      : _Out(_Out), Policy(Policy), Indentation(Indentation),
-        PrintInstantiation(PrintInstantiation) { }
+      : Context(Context), folderParm(folderParm), outputFile(nullptr),
+        tOut(nullptr), Policy(Context->getPrintingPolicy()),
+        Indentation(Indentation), PrintInstantiation(PrintInstantiation) { }
+
+    virtual ~PHGDeclPrinter() {
+        if (outputFile != nullptr)
+            delete outputFile;
+    }
 
     void VisitDeclContext(DeclContext *DC, bool Indent = true);
 
@@ -93,6 +110,44 @@ namespace {
     void PrintTemplateParameters(const TemplateParameterList *Params,
                                  const TemplateArgumentList *Args = 0);
     void prettyPrintAttributes(Decl *D);
+
+    inline void PrintTerminator(DeclContext::decl_iterator D, DeclContext::decl_iterator DEnd);
+
+  private:
+    inline bool ShouldVisitDecl(const Decl* D) {
+      if (Indentation >= Policy.Indentation)
+        return true;
+
+      PresumedLoc PLoc = Context->getSourceManager().getPresumedLoc(D->getLocation());
+      if (PLoc.isInvalid() || !folderParm.IsInsideInputConstraint(PLoc.getFilename()))
+          return false;
+
+      ChangeOutputFileIfNeeded(PLoc.getFilename());
+
+      return true;
+    }
+
+    inline void ChangeOutputFileIfNeeded (StringRef inputFilenameNew) {
+      if (Indentation >= Policy.Indentation)
+        return;
+
+      SmallString<256> inputFilenameNewAbsolute(inputFilenameNew);
+      make_absolute(inputFilenameNewAbsolute);
+
+      if (inputFilename.compare(inputFilenameNewAbsolute) == 0)
+          return;
+
+      if (outputFile != nullptr)
+          delete outputFile;
+
+      inputFilename = inputFilenameNewAbsolute;
+
+      SmallString<256> outputFilename(folderParm.outputFolder);
+      naive_uncomplete(inputFilename, folderParm.inputFolder, outputFilename);
+
+      std::string ErrorInfo;
+      outputFile = new raw_fd_ostream(outputFilename.c_str(), ErrorInfo, raw_fd_ostream::F_Binary);
+    }
   };
 }
 
@@ -168,6 +223,36 @@ void PHGDeclPrinter::Print(AccessSpecifier AS) {
 // Common C declarations
 //----------------------------------------------------------------------------
 
+inline void PHGDeclPrinter::PrintTerminator(DeclContext::decl_iterator D, DeclContext::decl_iterator DEnd) {
+  // FIXME: Need to be able to tell the PHGDeclPrinter when
+  const char *Terminator = 0;
+  if (isa<OMPThreadPrivateDecl>(*D))
+    Terminator = 0;
+  else if (isa<FunctionDecl>(*D) &&
+            cast<FunctionDecl>(*D)->isThisDeclarationADefinition())
+    Terminator = 0;
+  else if (isa<ObjCMethodDecl>(*D) && cast<ObjCMethodDecl>(*D)->getBody())
+    Terminator = 0;
+  else if (isa<NamespaceDecl>(*D) || isa<LinkageSpecDecl>(*D) ||
+            isa<ObjCImplementationDecl>(*D) ||
+            isa<ObjCInterfaceDecl>(*D) ||
+            isa<ObjCProtocolDecl>(*D) ||
+            isa<ObjCCategoryImplDecl>(*D) ||
+            isa<ObjCCategoryDecl>(*D))
+    Terminator = 0;
+  else if (isa<EnumConstantDecl>(*D)) {
+    DeclContext::decl_iterator Next = D;
+    ++Next;
+    if (Next != DEnd)
+      Terminator = ",";
+  } else
+    Terminator = ";";
+
+  if (Terminator)
+    Out() << Terminator;
+  Out() << "\n";
+}
+
 void PHGDeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent) {
   if (Policy.TerseOutput)
     return;
@@ -198,6 +283,13 @@ void PHGDeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent) {
           continue;
       }
     }
+
+    // === PHG ===
+
+    if (!ShouldVisitDecl(*D))
+      continue;
+
+    // === PHG ===
 
     // The next bits of code handles stuff like "struct {int x;} a,b"; we're
     // forced to merge the declarations because there's no other way to
@@ -257,33 +349,9 @@ void PHGDeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent) {
     this->Indent();
     Visit(*D);
 
-    // FIXME: Need to be able to tell the PHGDeclPrinter when
-    const char *Terminator = 0;
-    if (isa<OMPThreadPrivateDecl>(*D))
-      Terminator = 0;
-    else if (isa<FunctionDecl>(*D) &&
-             cast<FunctionDecl>(*D)->isThisDeclarationADefinition())
-      Terminator = 0;
-    else if (isa<ObjCMethodDecl>(*D) && cast<ObjCMethodDecl>(*D)->getBody())
-      Terminator = 0;
-    else if (isa<NamespaceDecl>(*D) || isa<LinkageSpecDecl>(*D) ||
-             isa<ObjCImplementationDecl>(*D) ||
-             isa<ObjCInterfaceDecl>(*D) ||
-             isa<ObjCProtocolDecl>(*D) ||
-             isa<ObjCCategoryImplDecl>(*D) ||
-             isa<ObjCCategoryDecl>(*D))
-      Terminator = 0;
-    else if (isa<EnumConstantDecl>(*D)) {
-      DeclContext::decl_iterator Next = D;
-      ++Next;
-      if (Next != DEnd)
-        Terminator = ",";
-    } else
-      Terminator = ";";
-
-    if (Terminator)
-      Out() << Terminator;
-    Out() << "\n";
+    // HACK-ish
+    if (!isa<NamespaceDecl>(*D))
+      PrintTerminator(D, DEnd);
   }
 
   if (!Decls.empty())
@@ -395,7 +463,7 @@ void PHGDeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
     Proto += "(";
     if (FT) {
       llvm::raw_string_ostream POut(Proto);
-      llvm::raw_ostream* OldOut = _Out; _Out = &POut;
+      llvm::raw_ostream* OldOut = tOut; tOut = &POut;
       for (unsigned i = 0, e = D->getNumParams(); i != e; ++i) {
         if (i) POut << ", ";
 //         ParamPrinter.VisitParmVarDecl(D->getParamDecl(i));
@@ -407,7 +475,7 @@ void PHGDeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
         POut << "...";
       }
 
-      _Out = OldOut;
+      tOut = OldOut;
     } else if (D->doesThisDeclarationHaveABody() && !D->hasPrototype()) {
       for (unsigned i = 0, e = D->getNumParams(); i != e; ++i) {
         if (i)
@@ -692,9 +760,9 @@ void PHGDeclPrinter::VisitStaticAssertDecl(StaticAssertDecl *D) {
 //----------------------------------------------------------------------------
 void PHGDeclPrinter::VisitNamespaceDecl(NamespaceDecl *D) {
   std::string s; raw_string_ostream o(s);
-  raw_ostream* OldOut = _Out; _Out = &o;
+  raw_ostream* OldOut = tOut; tOut = &o;
   VisitDeclContext(D);
-  _Out = OldOut; o.flush();
+  tOut = OldOut; o.flush();
 
   if (s.length() <= ((Indentation + Policy.Indentation) * 2 + 1))
     return;
@@ -704,6 +772,7 @@ void PHGDeclPrinter::VisitNamespaceDecl(NamespaceDecl *D) {
   Out() << "namespace " << *D << " {\n";
   Out() << s;
   Indent() << "}";
+  Out() << "\n";
 }
 
 void PHGDeclPrinter::VisitUsingDirectiveDecl(UsingDirectiveDecl *D) {
