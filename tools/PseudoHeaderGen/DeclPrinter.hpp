@@ -145,6 +145,7 @@ namespace {
       SmallString<256> outputFilename(folderParm.outputFolder);
       naive_uncomplete(inputFilename, folderParm.inputFolder, outputFilename);
 
+      bool existed; create_directories(parent_path(outputFilename), existed);
       std::string ErrorInfo;
       outputFile = new raw_fd_ostream(outputFilename.c_str(), ErrorInfo, raw_fd_ostream::F_Binary);
     }
