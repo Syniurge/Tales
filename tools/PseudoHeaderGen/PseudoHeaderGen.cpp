@@ -31,7 +31,7 @@
 
 // Port of a function (that doesn't even exist in boost::filesystem (but should!), taken from https://svn.boost.org/trac/boost/ticket/1976) to LLVM's exception-less equivalent implementation
 namespace llvm { namespace sys { namespace path {
-	error_code naive_uncomplete (StringRef path, StringRef base, SmallVectorImpl<char> &result) { // NOTE: result should be cleared before calling, it can't be cleared in the function because of the recursive calls
+	error_code naive_uncomplete (StringRef path, StringRef base, SmallVectorImpl<char> &result) { // NOTE: result should be cleared before calling, the function doesn't clear it because of the recursive calls
 		if (has_root_path(path)){
 			if (root_path(path) != root_path(base)) {
 				append(result, path);

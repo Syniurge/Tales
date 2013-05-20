@@ -734,7 +734,8 @@ namespace Tales {
 		if (idTyR != TYPEIDX_FUNCTION && idTyR != TYPEIDX_NIL)
 			return ErrorV("Not a function");
 		
-		if (idTyR == TYPEIDX_FUNCTION) { // Function is reachable in the s-tree
+		if (idTyR == TYPEIDX_FUNCTION) {
+			// Function is reachable in the s-tree
 			const NFunctionType* fTy = idTy->funcType;
 			
 			// If argument mismatch error.
@@ -796,7 +797,7 @@ namespace Tales {
 		// TODO: Tail calls
 	}
 	
-	Value* NAssignment::Codegen(CodegenContext& context) const {		
+	Value* NAssignment::Codegen(CodegenContext& context) const {
 		// NOTE: the code for an LHS identifier to be assigned is different from RHS "read-only" identifier
 		
 		vector<string>::size_type levelsSize = lhs.levels.size();

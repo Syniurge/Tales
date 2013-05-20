@@ -1,7 +1,7 @@
 /*
  * TalesRuntime.c - To save the trouble of IR creation for complex operations like finding a pair in a table, we use simpler C11 code compiled by Clang into LLVM IR.
  * 		The resulting IR is then parsed through llvm::ParseIR() to retrieve the struct types e.g for the GEP instructions and malloc calls.
- * 		Also LLVM inlines the calls to these functions, then the CFG simplification ensures that the generated IR is the same it would be if we were generating it manually.
+ * 		LLVM inlines many of these functions, so the CFG simplification ensures that the generated IR is almost the same it would be than if we were generating it manually.
  */
 
 /*
@@ -69,7 +69,7 @@ struct __TalesStructField {
 };
 
 struct __TalesTableHeader { // NOTE: The real LLVM structure used to allocate Tables is { { header }, { spairs } } where spairs differs from one table to another
-	// First chain pair (simply "pair" to keep LUA terms)
+	// First chain pair (simply "pair" to keep Lua terms)
 	struct __TalesChainPair* firstPair;
 
 	// Ipairs, all are dynamic values
@@ -189,7 +189,7 @@ INLINE_INTERNAL struct __TalesStructField* __TalesTableFindSPairS(struct __Tales
 }
 
 // Look for the cpair named "wanted", this is called for the first level which we couldn't find a spair for, hence we don't need to test the spairs again, only for the next levels
-// for LHS identifiers in assignments, create the pair if it doesn't exist (NOTE: unlike LUA, Tales creates as many levels as needed, each level < lastLevel being created as a table)
+// for LHS identifiers in assignments, create the pair if it doesn't exist (NOTE: unlike Lua, Tales creates as many levels as needed, each level < lastLevel being created as a table)
 INLINE_INTERNAL struct __TalesDynamicValue* __TalesTableGetCPairS(struct __TalesTableHeader* header, const char* wanted, bool createPair) {
 	struct __TalesChainPair* pair = header->firstPair,* prevPair = NULL;
 
@@ -217,7 +217,7 @@ INLINE_INTERNAL struct __TalesDynamicValue* __TalesTableGetCPairS(struct __Tales
 	return &pair->pvalue;
 }
 
-// Look for a spair, then for a cpair, and for LHS assignments, create a cpair if it doesn't exist.
+// Look for a spair, then for a cpair. And for LHS assignments, create a cpair if it doesn't exist.
 INLINE_INTERNAL void* __TalesTableGetLevel(struct __TalesTableHeader* header, const char* wanted, enum __TalesTypeIndex* typeIdx, bool createCPair) {
 	// First look for a struct field
 	struct __TalesStructField* spairInfo = __TalesTableFindSPairS(header, wanted);
