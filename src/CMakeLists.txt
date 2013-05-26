@@ -1,9 +1,6 @@
-list(APPEND CMAKE_MODULE_PATH "/usr/share/llvm/cmake" "/usr/local/share/llvm/cmake" "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-
-find_package(BISONCPP REQUIRED)
-find_package(FLEXCPP REQUIRED)
-find_package(LLVM REQUIRED)
-find_package(CLANG REQUIRED)
+find_package(BISONCPP REQUIRED 4.03)
+find_package(FLEXCPP REQUIRED 1.04)
+include(TalesClang)
  
 add_definitions(-std=c++11)
 
@@ -12,7 +9,7 @@ FLEXCPP_TARGET(TalesLexer Tales.l "${CMAKE_CURRENT_BINARY_DIR}/TalesLexer.cc" IM
 ADD_FLEXCPP_BISONCPP_DEPENDENCY(TalesLexer TalesParser)
 include_directories( ${CMAKE_CURRENT_BINARY_DIR} )
 
-CLANG_LLVMIR(TalesRuntime TalesRuntime.c "${CMAKE_CURRENT_BINARY_DIR}/TalesRuntime.s" DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/TalesRuntime.h" COMPILE_FLAGS -std=c11 -O3)
+TALESCLANG_LLVMIR(TalesRuntime TalesRuntime.c "${CMAKE_CURRENT_BINARY_DIR}/TalesRuntime.s" DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/TalesRuntime.h" COMPILE_FLAGS -std=c11 -O3 -Xclang -input-constraint -Xclang "${CMAKE_CURRENT_SOURCE_DIR}")
 # set(TalesRuntime_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/TalesRuntime.s.hpp")
 # add_custom_command(OUTPUT ${TalesRuntime_OUTPUT}
 # 	COMMAND "sh" "${CMAKE_CURRENT_SOURCE_DIR}/IR_to_hpp.sh" ${CLANG_LLVMIR_TalesRuntime_OUTPUT} ${TalesRuntime_OUTPUT}
@@ -31,7 +28,7 @@ add_library(Tales STATIC
 	TalesCodegen.cpp
 ) 
 target_link_libraries(Tales)
-set_source_files_properties(TalesCodegen.cpp PROPERTIES OBJECT_DEPENDS ${CLANG_LLVMIR_TalesRuntime_OUTPUT})
+set_source_files_properties(TalesCodegen.cpp PROPERTIES OBJECT_DEPENDS ${TALESCLANG_LLVMIR_TalesRuntime_OUTPUT})
 
 find_package(BOBCAT REQUIRED)
 

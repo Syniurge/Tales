@@ -1,8 +1,5 @@
-# set(PATH_TO_LLVM_SOURCE "" CACHE PATH "Path to LLVM source code.")
-# set(PATH_TO_LLVM_BUILD "" CACHE PATH "Path to the directory where LLVM was built.")
-
 # NOTE: PseudoHeaderGen also needs Clang's built-in headers.
-# That's why the tool needs to be linked rather than copied to work in the build folder, so the path to the headers remains valid.
+# That's why the tool needs to be linked rather than copied in order to work in the build folder, so that the path to the headers remains valid.
 # You can always use -isystem /path/to/llvmbinarybuild/lib/clang/3.x/include
 
 # TODO: check if PATH_TO_LLVM_SOURCE is empty/correct

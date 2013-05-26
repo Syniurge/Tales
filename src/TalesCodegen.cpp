@@ -719,7 +719,7 @@ namespace Tales {
 // 		Function* ExtF = context.talesModule.GetExternalFunction(funcId);
 		
 		// Look up the name in the global module table.
-		Function *ExtF = context.execEngine->FindFunctionNamed(funcId.FullPath().c_str());
+		Function *ExtF = context.execEngine->FindFunctionNamed(funcId.FullPath().c_str());  // TODO: it shouldn't be ExecutionEngine::FindFunctionNamed but a specific symbol table, d'ailleurs ce n'est pas InstallLazyFunctionCreator non plus, on a besoin de malloc par exemple mais le code Tales n'est pas autorisé à l'utiliser
 		if (ExtF) {
 			vector<Value*> ExtA(callArgs.size());
 			for (CallArgumentList::size_type i = 0, e = callArgs.size(); i != e; ++i)

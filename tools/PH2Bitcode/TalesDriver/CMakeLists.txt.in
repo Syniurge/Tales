@@ -1,0 +1,48 @@
+set( LLVM_LINK_COMPONENTS
+  ${LLVM_TARGETS_TO_BUILD}
+  asmparser
+  bitreader
+  bitwriter
+  irreader
+  codegen
+  instrumentation
+  ipo
+  linker
+  selectiondag
+  )
+
+add_clang_executable(TalesClang
+  driver.cpp
+  cc1_main.cpp
+  cc1as_main.cpp
+  )
+
+target_link_libraries(TalesClang
+  clangFrontendTool
+  clangAST
+  clangAnalysis
+  clangBasic
+  clangCodeGen
+  clangDriver
+  clangEdit
+  clangFrontend
+  clangLex
+  clangParse
+  clangEdit
+  clangARCMigrate
+  clangRewriteCore
+  clangRewriteFrontend
+  clangSema
+  clangSerialization
+  clangStaticAnalyzerFrontend
+  clangStaticAnalyzerCheckers
+  clangStaticAnalyzerCore
+  )
+
+set_target_properties(TalesClang PROPERTIES VERSION ${CLANG_EXECUTABLE_VERSION})
+set_target_properties(TalesClang PROPERTIES ENABLE_EXPORTS 1)
+
+add_dependencies(TalesClang clang-headers)
+
+# install(TARGETS clang
+#   RUNTIME DESTINATION bin)
