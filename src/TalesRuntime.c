@@ -366,10 +366,6 @@ INLINE bool __TalesFunctionTypecheck(union __TalesFPU v, enum __TalesTypeIndex v
 }
 
 
-// The IR produced by Clang only keeps the bare minimum declarations from included headers so we have to redefine these functions here in lack of a better way
 INLINE double __Tales_atof (const char *__nptr) { return strtod (__nptr, (char **) NULL); }
 INLINE int __Tales_atoi (const char *__nptr) { return (int) strtol (__nptr, (char **) NULL, 10); }
 INLINE long int __Tales_atol (const char *__nptr) { return strtol (__nptr, (char **) NULL, 10); }
-
-// HACK Clang pls
-__attribute__((used)) struct __TalesFunctionValue* l2KeepFV() { struct __TalesFunctionValue* m = malloc(sizeof(struct __TalesFunctionValue)); return m; }

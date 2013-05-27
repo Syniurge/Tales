@@ -18,8 +18,6 @@ if (EXISTS "${PATH_TO_LLVM_SOURCE}/lib/IRReader" AND EXISTS "${PATH_TO_LLVM_BUIL
 	set(LLVM_INCLUDE_DIRS "${PATH_TO_LLVM_SOURCE}/include" "${PATH_TO_LLVM_BUILD}/include")
 	set(LLVM_LIBRARY_DIRS "${LLVM_INSTALL_PREFIX}/lib")
 else()
-	list(APPEND CMAKE_MODULE_PATH "/usr/share/llvm/cmake" "/usr/local/share/llvm/cmake")
-
 	find_package(LLVM REQUIRED)
 endif()
 

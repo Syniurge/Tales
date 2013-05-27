@@ -73,10 +73,10 @@ using namespace clang::tooling;
 
 struct FolderParm {
 	// 1st command line parameter, output folder
-	SmallString<256> outputFolder;
+	SmallString<128> outputFolder;
 
 	// 2nd command line parameter, will only process declarations that are inside that file or folder
-	SmallString<256> inputConstraint;
+	SmallString<128> inputConstraint;
 
 	StringRef inputFolder;
 

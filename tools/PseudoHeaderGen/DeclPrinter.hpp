@@ -28,22 +28,26 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
+#include "TypePrinter.hpp"
 using namespace llvm;
 using namespace sys::fs;
 using namespace sys::path;
 using namespace clang;
+using namespace PHG;
 
 namespace {
   class PHGDeclPrinter : public DeclVisitor<PHGDeclPrinter> {
     ASTContext *Context;
     FolderParm& folderParm;
 
-    SmallString<256> inputFilename;
+    SmallString<128> inputFilename;
     raw_ostream* Out;
 
     PrintingPolicy Policy;
     unsigned Indentation;
     bool PrintInstantiation;
+
+    TypePrinter TyPrinter;
 
     raw_ostream& Indent() { return Indent(Indentation); }
     raw_ostream& Indent(unsigned Indentation);
@@ -57,7 +61,9 @@ namespace {
                 unsigned Indentation = 0, bool PrintInstantiation = false)
       : Context(Context), folderParm(folderParm), Out(nullptr),
         Policy(Context->getPrintingPolicy()), Indentation(Indentation),
-        PrintInstantiation(PrintInstantiation) { }
+        PrintInstantiation(PrintInstantiation), TyPrinter(Policy) {
+          Policy.SuppressUnwrittenScope = true;   // HACK-ish?
+    }
 
     virtual ~PHGDeclPrinter() {
         if (Out != nullptr)
@@ -113,7 +119,7 @@ namespace {
 
   private:
     inline bool ShouldVisitDecl(const Decl* D) {
-      if (Indentation >= Policy.Indentation)
+      if (Indentation >= Policy.Indentation)  // Scope.empty() could work too but Indentation is more reliable
         return true;
 
       PresumedLoc PLoc = Context->getSourceManager().getPresumedLoc(D->getLocation());
@@ -126,7 +132,7 @@ namespace {
     }
 
     inline void ChangeOutputFileIfNeeded (StringRef inputFilenameNew) {
-      SmallString<256> inputFilenameNewAbsolute(inputFilenameNew);
+      SmallString<128> inputFilenameNewAbsolute(inputFilenameNew);
       make_absolute(inputFilenameNewAbsolute);
 
       if (inputFilename.compare(inputFilenameNewAbsolute) == 0)
@@ -137,7 +143,7 @@ namespace {
 
       inputFilename = inputFilenameNewAbsolute;
 
-      SmallString<256> outputFilename(folderParm.outputFolder);
+      SmallString<128> outputFilename(folderParm.outputFolder);
       naive_uncomplete(inputFilename, folderParm.inputFolder, outputFilename);
 
       bool existed; create_directories(parent_path(outputFilename), existed);
@@ -224,9 +230,9 @@ inline void PHGDeclPrinter::PrintTerminator(DeclContext::decl_iterator D, DeclCo
   const char *Terminator = 0;
   if (isa<OMPThreadPrivateDecl>(*D))
     Terminator = 0;
-  else if (isa<FunctionDecl>(*D) &&
-            cast<FunctionDecl>(*D)->isThisDeclarationADefinition())
-    Terminator = 0;
+//   else if (isa<FunctionDecl>(*D) &&
+//             cast<FunctionDecl>(*D)->isThisDeclarationADefinition())
+//     Terminator = 0;
   else if (isa<ObjCMethodDecl>(*D) && cast<ObjCMethodDecl>(*D)->getBody())
     Terminator = 0;
   else if (isa<NamespaceDecl>(*D) || isa<LinkageSpecDecl>(*D) ||
@@ -517,67 +523,67 @@ void PHGDeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
     }
 
     if (CDecl) {
-      bool HasInitializerList = false;
-      for (CXXConstructorDecl::init_const_iterator B = CDecl->init_begin(),
-           E = CDecl->init_end();
-           B != E; ++B) {
-        CXXCtorInitializer *BMInitializer = (*B);
-        if (BMInitializer->isInClassMemberInitializer())
-          continue;
-
-        if (!HasInitializerList) {
-          Proto += " : ";
-          *Out << Proto;
-          Proto.clear();
-          HasInitializerList = true;
-        } else
-          *Out << ", ";
-
-        if (BMInitializer->isAnyMemberInitializer()) {
-          FieldDecl *FD = BMInitializer->getAnyMember();
-          *Out << *FD;
-        } else {
-          *Out << QualType(BMInitializer->getBaseClass(), 0).getAsString(Policy);
-        }
-        
-        *Out << "(";
-        if (!BMInitializer->getInit()) {
-          // Nothing to print
-        } else {
-          Expr *Init = BMInitializer->getInit();
-          if (ExprWithCleanups *Tmp = dyn_cast<ExprWithCleanups>(Init))
-            Init = Tmp->getSubExpr();
-          
-          Init = Init->IgnoreParens();
-          
-          Expr *SimpleInit = 0;
-          Expr **Args = 0;
-          unsigned NumArgs = 0;
-          if (ParenListExpr *ParenList = dyn_cast<ParenListExpr>(Init)) {
-            Args = ParenList->getExprs();
-            NumArgs = ParenList->getNumExprs();
-          } else if (CXXConstructExpr *Construct
-                                        = dyn_cast<CXXConstructExpr>(Init)) {
-            Args = Construct->getArgs();
-            NumArgs = Construct->getNumArgs();
-          } else
-            SimpleInit = Init;
-          
-          if (SimpleInit)
-            SimpleInit->printPretty(*Out, 0, Policy, Indentation);
-          else {
-            for (unsigned I = 0; I != NumArgs; ++I) {
-              if (isa<CXXDefaultArgExpr>(Args[I]))
-                break;
-              
-              if (I)
-                *Out << ", ";
-              Args[I]->printPretty(*Out, 0, Policy, Indentation);
-            }
-          }
-        }
-        *Out << ")";
-      }
+//       bool HasInitializerList = false;
+//       for (CXXConstructorDecl::init_const_iterator B = CDecl->init_begin(),
+//            E = CDecl->init_end();
+//            B != E; ++B) {
+//         CXXCtorInitializer *BMInitializer = (*B);
+//         if (BMInitializer->isInClassMemberInitializer())
+//           continue;
+//
+//         if (!HasInitializerList) {
+//           Proto += " : ";
+//           *Out << Proto;
+//           Proto.clear();
+//           HasInitializerList = true;
+//         } else
+//           *Out << ", ";
+//
+//         if (BMInitializer->isAnyMemberInitializer()) {
+//           FieldDecl *FD = BMInitializer->getAnyMember();
+//           *Out << *FD;
+//         } else {
+//           *Out << QualType(BMInitializer->getBaseClass(), 0).getAsString(Policy);
+//         }
+//
+//         *Out << "(";
+//         if (!BMInitializer->getInit()) {
+//           // Nothing to print
+//         } else {
+//           Expr *Init = BMInitializer->getInit();
+//           if (ExprWithCleanups *Tmp = dyn_cast<ExprWithCleanups>(Init))
+//             Init = Tmp->getSubExpr();
+//
+//           Init = Init->IgnoreParens();
+//
+//           Expr *SimpleInit = 0;
+//           Expr **Args = 0;
+//           unsigned NumArgs = 0;
+//           if (ParenListExpr *ParenList = dyn_cast<ParenListExpr>(Init)) {
+//             Args = ParenList->getExprs();
+//             NumArgs = ParenList->getNumExprs();
+//           } else if (CXXConstructExpr *Construct
+//                                         = dyn_cast<CXXConstructExpr>(Init)) {
+//             Args = Construct->getArgs();
+//             NumArgs = Construct->getNumArgs();
+//           } else
+//             SimpleInit = Init;
+//
+//           if (SimpleInit)
+//             SimpleInit->printPretty(*Out, 0, Policy, Indentation);
+//           else {
+//             for (unsigned I = 0; I != NumArgs; ++I) {
+//               if (isa<CXXDefaultArgExpr>(Args[I]))
+//                 break;
+//
+//               if (I)
+//                 *Out << ", ";
+//               Args[I]->printPretty(*Out, 0, Policy, Indentation);
+//             }
+//           }
+//         }
+//         *Out << ")";
+//       }
       if (!Proto.empty())
         *Out << Proto;
     } else {
@@ -585,10 +591,10 @@ void PHGDeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
         *Out << "auto " << Proto << " -> ";
         Proto.clear();
       }
-      AFT->getResultType().print(*Out, Policy, Proto);
+      TyPrinter.print(AFT->getResultType(), *Out, Proto);
     }
   } else {
-    Ty.print(*Out, Policy, Proto);
+    TyPrinter.print(Ty, *Out, Proto);
   }
 
   prettyPrintAttributes(D);
@@ -651,22 +657,21 @@ void PHGDeclPrinter::VisitFieldDecl(FieldDecl *D) {
   if (!Policy.SuppressSpecifiers && D->isModulePrivate())
     *Out << "__module_private__ ";
 
-  *Out << D->getASTContext().getUnqualifiedObjCPointerType(D->getType()).
-            stream(Policy, D->getName());
+  TyPrinter.print(D->getASTContext().getUnqualifiedObjCPointerType(D->getType()), *Out, D->getName());
 
   if (D->isBitField()) {
     *Out << " : ";
     D->getBitWidth()->printPretty(*Out, 0, Policy, Indentation);
   }
 
-  Expr *Init = D->getInClassInitializer();
-  if (!Policy.SuppressInitializers && Init) {
-    if (D->getInClassInitStyle() == ICIS_ListInit)
-      *Out << " ";
-    else
-      *Out << " = ";
-    Init->printPretty(*Out, 0, Policy, Indentation);
-  }
+//   Expr *Init = D->getInClassInitializer();
+//   if (!Policy.SuppressInitializers && Init) {
+//     if (D->getInClassInitStyle() == ICIS_ListInit)
+//       *Out << " ";
+//     else
+//       *Out << " = ";
+//     Init->printPretty(*Out, 0, Policy, Indentation);
+//   }
   prettyPrintAttributes(D);
 }
 
@@ -702,7 +707,7 @@ void PHGDeclPrinter::VisitVarDecl(VarDecl *D) {
   QualType T = D->getASTContext().getUnqualifiedObjCPointerType(D->getType());
   if (ParmVarDecl *Parm = dyn_cast<ParmVarDecl>(D))
     T = Parm->getOriginalType();
-  T.print(*Out, Policy, D->getName());
+  TyPrinter.print(T, *Out, D->getName());
   Expr *Init = D->getInit();
   if (!Policy.SuppressInitializers && Init) {
     bool ImplicitInit = false;
@@ -757,7 +762,9 @@ void PHGDeclPrinter::VisitStaticAssertDecl(StaticAssertDecl *D) {
 void PHGDeclPrinter::VisitNamespaceDecl(NamespaceDecl *D) {
   std::string s; raw_string_ostream o(s);
   raw_ostream* OldOut = Out; Out = &o;
+  TyPrinter.ScopePush(D->getName());
   VisitDeclContext(D);
+  TyPrinter.ScopePop();
   Out = OldOut; o.flush();
 
   if (s.length() <= ((Indentation + Policy.Indentation) * 2 + 1))
@@ -811,7 +818,7 @@ void PHGDeclPrinter::VisitCXXRecordDecl(CXXRecordDecl *D) {
         AccessSpecifier AS = Base->getAccessSpecifierAsWritten();
         if (AS != AS_none)
           Print(AS);
-        *Out << " " << Base->getType().getAsString(Policy);
+        *Out << " "; TyPrinter.print(Base->getType(), *Out, "");
 
         if (Base->isPackExpansion())
           *Out << "...";
@@ -821,7 +828,9 @@ void PHGDeclPrinter::VisitCXXRecordDecl(CXXRecordDecl *D) {
     // Print the class definition
     // FIXME: Doesn't print access specifiers, e.g., "public:"
     *Out << " {\n";
+    TyPrinter.ScopePush(D->getName());
     VisitDeclContext(D);
+    TyPrinter.ScopePop();
     Indent() << "}";
   }
 }

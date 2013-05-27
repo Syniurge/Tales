@@ -27,6 +27,7 @@ PSEUDOHEADERGEN_SOURCE_DIR="$( cd -P "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 [ ! -e "$EXTRA_DIR/TalesPseudoHeaderGen/CMakeLists.txt" ] && ln -s "$PSEUDOHEADERGEN_SOURCE_DIR/CMakeLists.txt.in" "$EXTRA_DIR/TalesPseudoHeaderGen/CMakeLists.txt"
 [ ! -e "$EXTRA_DIR/TalesPseudoHeaderGen/PseudoHeaderGen.cpp" ] && ln -s "$PSEUDOHEADERGEN_SOURCE_DIR/PseudoHeaderGen.cpp" "$EXTRA_DIR/TalesPseudoHeaderGen/"
 [ ! -e "$EXTRA_DIR/TalesPseudoHeaderGen/DeclPrinter.hpp" ] && ln -s "$PSEUDOHEADERGEN_SOURCE_DIR/DeclPrinter.hpp" "$EXTRA_DIR/TalesPseudoHeaderGen/"
+[ ! -e "$EXTRA_DIR/TalesPseudoHeaderGen/TypePrinter.hpp" ] && ln -s "$PSEUDOHEADERGEN_SOURCE_DIR/TypePrinter.hpp" "$EXTRA_DIR/TalesPseudoHeaderGen/"
 
 cd "$PATH_TO_LLVM_BUILD"
 cmake "$PATH_TO_LLVM_SOURCE"
