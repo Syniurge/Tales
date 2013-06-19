@@ -49,6 +49,8 @@ namespace {
 
     TypePrinter TyPrinter;
 
+    bool DeferredAS;
+
     raw_ostream& Indent() { return Indent(Indentation); }
     raw_ostream& Indent(unsigned Indentation);
     void ProcessDeclGroup(SmallVectorImpl<Decl*>& Decls);
@@ -61,7 +63,8 @@ namespace {
                 unsigned Indentation = 0, bool PrintInstantiation = false)
       : Context(Context), folderParm(folderParm), Out(nullptr),
         Policy(Context->getPrintingPolicy()), Indentation(Indentation),
-        PrintInstantiation(PrintInstantiation), TyPrinter(Policy) {
+        PrintInstantiation(PrintInstantiation), TyPrinter(Policy),
+        DeferredAS(false) {
           Policy.SuppressUnwrittenScope = true;   // HACK-ish?
     }
 
@@ -192,7 +195,7 @@ raw_ostream& PHGDeclPrinter::Indent(unsigned Indentation) {
 }
 
 void PHGDeclPrinter::prettyPrintAttributes(Decl *D) {
-  if (Policy.PolishForDeclaration)
+  if (Policy.PolishForDeclaration || true)
     return;
   
   if (D->hasAttrs()) {
@@ -263,6 +266,7 @@ void PHGDeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent) {
     Indentation += Policy.Indentation;
 
   SmallVector<Decl*, 2> Decls;
+  bool IsPrevUnnamedTag = false;
   for (DeclContext::decl_iterator D = DC->decls_begin(), DEnd = DC->decls_end();
        D != DEnd; ++D) {
 
@@ -288,6 +292,9 @@ void PHGDeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent) {
 
     // === PHG ===
 
+    if (isa<TypedefDecl>(*D) && IsPrevUnnamedTag)
+      Decls.pop_back();
+
     if (!ShouldVisitDecl(*D))
       continue;
 
@@ -307,6 +314,7 @@ void PHGDeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent) {
       if (!BaseType.isNull() && isa<TagType>(BaseType) &&
           cast<TagType>(BaseType)->getDecl() == Decls[0]) {
         Decls.push_back(*D);
+        IsPrevUnnamedTag = true;
         continue;
       }
     }
@@ -319,8 +327,11 @@ void PHGDeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent) {
     // so we can merge it with the subsequent declaration(s) using it.
     if (isa<TagDecl>(*D) && !cast<TagDecl>(*D)->getIdentifier()) {
       Decls.push_back(*D);
+      IsPrevUnnamedTag = true;
       continue;
     }
+
+    IsPrevUnnamedTag = false;
 
     // === PHG ===
 
@@ -337,16 +348,23 @@ void PHGDeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent) {
     if (isa<FriendDecl>(*D) || isa<FriendTemplateDecl>(*D))
       continue;
 
-    // === PHG ===
+    if (D->getAccess() == AS_protected || D->getAccess() == AS_private)
+      continue;
 
+    // Avoid empty public: sections
     if (isa<AccessSpecDecl>(*D)) {
+      DeferredAS = true;
+      continue;
+    } else if (DeferredAS && D->getAccess() != AS_none) {
       Indentation -= Policy.Indentation;
       this->Indent();
       Print(D->getAccess());
       *Out << ":\n";
       Indentation += Policy.Indentation;
-      continue;
     }
+    DeferredAS = false;
+
+    // === PHG ===
 
     this->Indent();
     Visit(*D);
@@ -368,13 +386,19 @@ void PHGDeclPrinter::VisitTranslationUnitDecl(TranslationUnitDecl *D) {
 }
 
 void PHGDeclPrinter::VisitTypedefDecl(TypedefDecl *D) {
+  if (const TagType* TT = D->getUnderlyingType().getTypePtr()->getAs<TagType>()) // BUG, getBaseTypeIdentifier isn't enough to differentiate between anonymous tags and other types
+    if (!TT->getDecl()->getIdentifier()) {
+      TyPrinter.print(D->getUnderlyingType(), *Out, "");  // yeah, this works (HACK?)
+      return;
+    }
+
   if (!Policy.SuppressSpecifiers) {
     *Out << "typedef ";
     
     if (D->isModulePrivate())
       *Out << "__module_private__ ";
   }
-  D->getUnderlyingType().print(*Out, Policy, D->getName());
+  TyPrinter.print(D->getUnderlyingType(), *Out, D->getName());
   prettyPrintAttributes(D);
 }
 
@@ -591,7 +615,12 @@ void PHGDeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
         *Out << "auto " << Proto << " -> ";
         Proto.clear();
       }
-      TyPrinter.print(AFT->getResultType(), *Out, Proto);
+
+      if (isa<CXXDestructorDecl>(D) || isa<CXXConversionDecl>(D)) {
+        *Out << Proto;
+      } else {
+        TyPrinter.print(AFT->getResultType(), *Out, Proto);
+      }
     }
   } else {
     TyPrinter.print(Ty, *Out, Proto);
@@ -865,51 +894,60 @@ void PHGDeclPrinter::PrintTemplateParameters(const TemplateParameterList *Params
     if (i != 0)
       *Out << ", ";
 
+    // BUG fixed in PHG: vanilla DeclPrinter doesn't add the space between two '>'
+    // required by the pre-0x C++ standard
+    SmallString<128> Buf;
+    llvm::raw_svector_ostream ArgOS(Buf);
+
     const Decl *Param = Params->getParam(i);
     if (const TemplateTypeParmDecl *TTP =
           dyn_cast<TemplateTypeParmDecl>(Param)) {
 
       if (TTP->wasDeclaredWithTypename())
-        *Out << "typename ";
+        ArgOS << "typename ";
       else
-        *Out << "class ";
+        ArgOS << "class ";
 
       if (TTP->isParameterPack())
-        *Out << "... ";
+        ArgOS << "... ";
 
-      *Out << *TTP;
+      ArgOS << *TTP;
 
       if (Args) {
-        *Out << " = ";
-        Args->get(i).print(Policy, *Out);
+        ArgOS << " = ";
+        Args->get(i).print(Policy, ArgOS);
       } else if (TTP->hasDefaultArgument()) {
-        *Out << " = ";
-        *Out << TTP->getDefaultArgument().getAsString(Policy);
-      };
+        ArgOS << " = ";
+        ArgOS << TTP->getDefaultArgument().getAsString(Policy);
+      }
     } else if (const NonTypeTemplateParmDecl *NTTP =
                  dyn_cast<NonTypeTemplateParmDecl>(Param)) {
-      *Out << NTTP->getType().getAsString(Policy);
+      ArgOS << NTTP->getType().getAsString(Policy);
 
       if (NTTP->isParameterPack() && !isa<PackExpansionType>(NTTP->getType()))
-        *Out << "...";
+        ArgOS << "...";
         
       if (IdentifierInfo *Name = NTTP->getIdentifier()) {
-        *Out << ' ';
-        *Out << Name->getName();
+        ArgOS << ' ';
+        ArgOS << Name->getName();
       }
 
       if (Args) {
-        *Out << " = ";
-        Args->get(i).print(Policy, *Out);
+        ArgOS << " = ";
+        Args->get(i).print(Policy, ArgOS);
       } else if (NTTP->hasDefaultArgument()) {
-        *Out << " = ";
-        NTTP->getDefaultArgument()->printPretty(*Out, 0, Policy, Indentation);
+        ArgOS << " = ";
+        NTTP->getDefaultArgument()->printPretty(ArgOS, 0, Policy, Indentation);
       }
     } else if (const TemplateTemplateParmDecl *TTPD =
                  dyn_cast<TemplateTemplateParmDecl>(Param)) {
       VisitTemplateDecl(TTPD);
       // FIXME: print the default argument, if present.
     }
+
+    *Out << ArgOS.str();
+    if (i == (e - 1) && ArgOS.str().back() == '>')
+      *Out << ' ';
   }
 
   *Out << "> ";

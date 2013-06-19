@@ -44,5 +44,25 @@ set_target_properties(TalesClang PROPERTIES ENABLE_EXPORTS 1)
 
 add_dependencies(TalesClang clang-headers)
 
-# install(TARGETS clang
-#   RUNTIME DESTINATION bin)
+if(UNIX)
+  set(CLANGXX_LINK_OR_COPY create_symlink)
+# Create a relative symlink
+  set(clang_binary "TalesClang${CMAKE_EXECUTABLE_SUFFIX}")
+else()
+  set(CLANGXX_LINK_OR_COPY copy)
+  set(clang_binary "${LLVM_BINARY_DIR}/bin/${CMAKE_CFG_INTDIR}/TalesClang${CMAKE_EXECUTABLE_SUFFIX}")
+endif()
+
+# Create the TalesClang++ symlink in the build directory.
+set(clang_pp "${LLVM_BINARY_DIR}/bin/${CMAKE_CFG_INTDIR}/TalesClang++${CMAKE_EXECUTABLE_SUFFIX}")
+add_custom_command(TARGET TalesClang POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E ${CLANGXX_LINK_OR_COPY} "${clang_binary}" "${clang_pp}")
+
+set_property(DIRECTORY APPEND
+  PROPERTY ADDITIONAL_MAKE_CLEAN_FILES ${clang_pp})
+
+install(TARGETS TalesClang
+  RUNTIME DESTINATION bin)
+
+# Create the TalesClang++ symlink at installation time.
+install(SCRIPT clang_symlink.cmake -DCMAKE_INSTALL_PREFIX=\"${CMAKE_INSTALL_PREFIX}\")

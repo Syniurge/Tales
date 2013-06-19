@@ -282,9 +282,18 @@ static void ParseProgName(SmallVectorImpl<const char *> &ArgVector,
     bool IsCXX;
     bool IsCPP;
   } suffixes [] = {
-    { "TalesClang", false, false },
-    { "TalesClang++", true, false },
-    { "TalesClangpp", false, true },
+    { "Clang", false, false },
+    { "Clang++", true, false },
+    { "clang", false, false },
+    { "clang++", true, false },
+    { "clang-c++", true, false },
+    { "clang-cc", false, false },
+    { "clang-cpp", false, true },
+    { "clang-g++", true, false },
+    { "clang-gcc", false, false },
+    { "cc", false, false },
+    { "cpp", false, true },
+    { "++", true, false },
   };
   std::string ProgName(llvm::sys::path::stem(ArgVector[0]));
   StringRef ProgNameRef(ProgName);

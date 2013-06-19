@@ -87,14 +87,30 @@ namespace PHG {
     void AppendScopeLevel(raw_ostream& OS, StringRef L, StringRef ScopeL, int& ScopeI);   // append if l != scopeL
     void AppendScopeInternal(DeclContext *DC, raw_ostream &OS, int& ScopeI);
 
+    void PrintTemplateArgumentList(raw_ostream &OS,
+                                        const TemplateArgument *Args,
+                                        unsigned NumArgs,
+                                        bool SkipBrackets = false);
+
+    void PrintTemplateArgument(const TemplateArgument &A,
+                             raw_ostream &Out);
+
   public:
+    // Types should always be written with their full scope, here's why:
+    // Since using directives aren't preserved, there's no reliable way to guess which scope the original type was part of when encountering unknown types during the fuzzy parsing of pseudo-headers. At first I thought that types could simply be automatically forward declared and only their unscoped name be compared, but that cannot work for templates, you can't guess the initial template declaration from a template specialization, there may be a template with the same name in two namespaces, and it'd be risky and hackish to do comparisons without all the template arguments deduced by Sema, even fuzzy ones.
+    // I wrote the code to remove unneeded scope prefixes but didn't envisionned that issue. Hence in the end redundant scope is only removed from bases of a class declaration, since they're ignored during the PH parsing.
+    // NOTE; ACTUALLY IGNORE EVERYTHING I JUST WROTE
+    bool FullScope;  // consider it an extension to the PrintingPolicy
+
     explicit TypePrinter(const PrintingPolicy &Policy)
-      : Policy(Policy), HasEmptyPlaceHolder(false) { }
+      : Policy(Policy), HasEmptyPlaceHolder(false), FullScope(false) { }
 
     void print(const Type *ty, Qualifiers qs, raw_ostream &OS,
                StringRef PlaceHolder);
     void print(QualType T, raw_ostream &OS, StringRef PlaceHolder);
 
+    void printQualifiers(Qualifiers& Q, raw_ostream &OS,
+                                      bool appendSpaceIfNonEmpty = false);
     static bool canPrefixQualifiers(const Type *T, bool &NeedARCStrongQualifier);
     void spaceBeforePlaceHolder(raw_ostream &OS);
     void printTypeSpec(const NamedDecl *D, raw_ostream &OS);
@@ -126,10 +142,14 @@ static void AppendTypeQualList(raw_ostream &OS, unsigned TypeQuals) {
     OS << "volatile";
     appendSpace = true;
   }
-  if (TypeQuals & Qualifiers::Restrict) {
-    if (appendSpace) OS << ' ';
-    OS << "restrict";
-  }
+  // PHG NOTE: Clang 3.3 complains about restrict keywords in extern "C" decls
+  // restrict is in C99 but isn't part of the C++ standard yet although it seems
+  // that many compilers support it (but not Clang obviously)
+  // FIXME: We should test if lang is C++
+//   if (TypeQuals & Qualifiers::Restrict) {
+//     if (appendSpace) OS << ' ';
+//     OS << "restrict";
+//   }
 }
 
 void TypePrinter::spaceBeforePlaceHolder(raw_ostream &OS) {
@@ -154,6 +174,70 @@ void TypePrinter::print(const Type *T, Qualifiers Quals, raw_ostream &OS,
   printBefore(T, Quals, OS);
   OS << PlaceHolder;
   printAfter(T, Quals, OS);
+}
+
+// Appends qualifiers to the given string, separated by spaces.  Will
+// prefix a space if the string is non-empty.  Will not append a final
+// space.
+void TypePrinter::printQualifiers(Qualifiers& Q, raw_ostream &OS, bool appendSpaceIfNonEmpty) {
+  bool addSpace = false;
+
+  unsigned quals = Q.getCVRQualifiers();
+  if (quals) {
+    AppendTypeQualList(OS, quals);
+    addSpace = true;
+  }
+  if (unsigned addrspace = Q.getAddressSpace()) {
+    if (addSpace)
+      OS << ' ';
+    addSpace = true;
+    switch (addrspace) {
+      case LangAS::opencl_global:
+        OS << "__global";
+        break;
+      case LangAS::opencl_local:
+        OS << "__local";
+        break;
+      case LangAS::opencl_constant:
+        OS << "__constant";
+        break;
+      default:
+        OS << "__attribute__((address_space(";
+        OS << addrspace;
+        OS << ")))";
+    }
+  }
+  if (Qualifiers::GC gc = Q.getObjCGCAttr()) {
+    if (addSpace)
+      OS << ' ';
+    addSpace = true;
+    if (gc == Qualifiers::Weak)
+      OS << "__weak";
+    else
+      OS << "__strong";
+  }
+  if (Qualifiers::ObjCLifetime lifetime = Q.getObjCLifetime()) {
+    if (!(lifetime == Qualifiers::OCL_Strong && Policy.SuppressStrongLifetime)){
+      if (addSpace)
+        OS << ' ';
+      addSpace = true;
+    }
+
+    switch (lifetime) {
+    case Qualifiers::OCL_None: llvm_unreachable("none but true");
+    case Qualifiers::OCL_ExplicitNone: OS << "__unsafe_unretained"; break;
+    case Qualifiers::OCL_Strong:
+      if (!Policy.SuppressStrongLifetime)
+        OS << "__strong";
+      break;
+
+    case Qualifiers::OCL_Weak: OS << "__weak"; break;
+    case Qualifiers::OCL_Autoreleasing: OS << "__autoreleasing"; break;
+    }
+  }
+
+  if (appendSpaceIfNonEmpty && addSpace)
+    OS << ' ';
 }
 
 bool TypePrinter::canPrefixQualifiers(const Type *T,
@@ -245,7 +329,7 @@ void TypePrinter::printBefore(QualType T, raw_ostream &OS) {
 
 /// \brief Prints the part of the type string before an identifier, e.g. for
 /// "int foo[10]" it prints "int ".
-void TypePrinter::printBefore(const Type *T,Qualifiers Quals, raw_ostream &OS) {
+void TypePrinter::printBefore(const Type *T, Qualifiers Quals, raw_ostream &OS) {
   if (Policy.SuppressSpecifiers && T->isSpecifierType())
     return;
 
@@ -260,9 +344,9 @@ void TypePrinter::printBefore(const Type *T,Qualifiers Quals, raw_ostream &OS) {
   if (CanPrefixQualifiers && !Quals.empty()) {
     if (NeedARCStrongQualifier) {
       IncludeStrongLifetimeRAII Strong(Policy);
-      Quals.print(OS, Policy, /*appendSpaceIfNonEmpty=*/true);
+      printQualifiers(Quals, OS, /*appendSpaceIfNonEmpty=*/true);
     } else {
-      Quals.print(OS, Policy, /*appendSpaceIfNonEmpty=*/true);
+      printQualifiers(Quals, OS, /*appendSpaceIfNonEmpty=*/true);
     }
   }
 
@@ -284,9 +368,9 @@ void TypePrinter::printBefore(const Type *T,Qualifiers Quals, raw_ostream &OS) {
   if (hasAfterQuals) {
     if (NeedARCStrongQualifier) {
       IncludeStrongLifetimeRAII Strong(Policy);
-      Quals.print(OS, Policy, /*appendSpaceIfNonEmpty=*/!PrevPHIsEmpty.get());
+      printQualifiers(Quals, OS, /*appendSpaceIfNonEmpty=*/!PrevPHIsEmpty.get());
     } else {
-      Quals.print(OS, Policy, /*appendSpaceIfNonEmpty=*/!PrevPHIsEmpty.get());
+      printQualifiers(Quals, OS, /*appendSpaceIfNonEmpty=*/!PrevPHIsEmpty.get());
     }
   }
 }
@@ -600,42 +684,42 @@ void TypePrinter::printFunctionProtoAfter(const FunctionProtoType *T,
   
   OS << ')';
 
-  FunctionType::ExtInfo Info = T->getExtInfo();
-  switch(Info.getCC()) {
-  case CC_Default: break;
-  case CC_C:
-    OS << " __attribute__((cdecl))";
-    break;
-  case CC_X86StdCall:
-    OS << " __attribute__((stdcall))";
-    break;
-  case CC_X86FastCall:
-    OS << " __attribute__((fastcall))";
-    break;
-  case CC_X86ThisCall:
-    OS << " __attribute__((thiscall))";
-    break;
-  case CC_X86Pascal:
-    OS << " __attribute__((pascal))";
-    break;
-  case CC_AAPCS:
-    OS << " __attribute__((pcs(\"aapcs\")))";
-    break;
-  case CC_AAPCS_VFP:
-    OS << " __attribute__((pcs(\"aapcs-vfp\")))";
-    break;
-  case CC_PnaclCall:
-    OS << " __attribute__((pnaclcall))";
-    break;
-  case CC_IntelOclBicc:
-    OS << " __attribute__((intel_ocl_bicc))";
-    break;
-  }
-  if (Info.getNoReturn())
-    OS << " __attribute__((noreturn))";
-  if (Info.getRegParm())
-    OS << " __attribute__((regparm ("
-       << Info.getRegParm() << ")))";
+//   FunctionType::ExtInfo Info = T->getExtInfo();
+//   switch(Info.getCC()) {
+//   case CC_Default: break;
+//   case CC_C:
+//     OS << " __attribute__((cdecl))";
+//     break;
+//   case CC_X86StdCall:
+//     OS << " __attribute__((stdcall))";
+//     break;
+//   case CC_X86FastCall:
+//     OS << " __attribute__((fastcall))";
+//     break;
+//   case CC_X86ThisCall:
+//     OS << " __attribute__((thiscall))";
+//     break;
+//   case CC_X86Pascal:
+//     OS << " __attribute__((pascal))";
+//     break;
+//   case CC_AAPCS:
+//     OS << " __attribute__((pcs(\"aapcs\")))";
+//     break;
+//   case CC_AAPCS_VFP:
+//     OS << " __attribute__((pcs(\"aapcs-vfp\")))";
+//     break;
+//   case CC_PnaclCall:
+//     OS << " __attribute__((pnaclcall))";
+//     break;
+//   case CC_IntelOclBicc:
+//     OS << " __attribute__((intel_ocl_bicc))";
+//     break;
+//   }
+//   if (Info.getNoReturn())
+//     OS << " __attribute__((noreturn))";
+//   if (Info.getRegParm())
+//     OS << " __attribute__((regparm ("
+//        << Info.getRegParm() << ")))";
 
   if (unsigned quals = T->getTypeQuals()) {
     OS << ' ';
@@ -780,9 +864,9 @@ void TypePrinter::printAtomicBefore(const AtomicType *T, raw_ostream &OS) {
 void TypePrinter::printAtomicAfter(const AtomicType *T, raw_ostream &OS) { }
 
 void TypePrinter::AppendScopeLevel(raw_ostream& OS, StringRef L, StringRef ScopeL, int& ScopeI) {
-  if (ScopeL.compare(L) != 0) {
+  if (ScopeI == -1 || ScopeL.compare(L) != 0) {
     OS << L << "::";
-    ScopeI = -1;  // makes the rest of the Scope irrelevant
+    ScopeI = -1;  // makes the rest of the Scope stack irrelevant
   }
 }
 
@@ -812,11 +896,10 @@ void TypePrinter::AppendScopeInternal(DeclContext* DC, raw_ostream& OS, int& Sco
     IncludeStrongLifetimeRAII Strong(Policy);
     OS << Spec->getIdentifier()->getName();
     const TemplateArgumentList &TemplateArgs = Spec->getTemplateArgs();
-    TemplateSpecializationType::PrintTemplateArgumentList(OS,
-                                            TemplateArgs.data(),
-                                            TemplateArgs.size(),
-                                            Policy);
-    OS << "::";
+    PrintTemplateArgumentList(OS,
+                            TemplateArgs.data(),
+                            TemplateArgs.size());
+    OS << "::"; ScopeI = -1;
   } else if (TagDecl *Tag = dyn_cast<TagDecl>(DC)) {
     if (TypedefNameDecl *Typedef = Tag->getTypedefNameForAnonDecl())
       AppendScopeLevel(OS, Typedef->getIdentifier()->getName(), ScopeLevel, ScopeI);
@@ -828,7 +911,7 @@ void TypePrinter::AppendScopeInternal(DeclContext* DC, raw_ostream& OS, int& Sco
 }
 
 void TypePrinter::AppendScope(DeclContext *DC, raw_ostream &OS) {
-  int ScopeI = 0;
+  int ScopeI = FullScope ? -1 : 0;
   AppendScopeInternal(DC, OS, ScopeI);
 }
 
@@ -908,9 +991,7 @@ void TypePrinter::printTag(TagDecl *D, raw_ostream &OS) {
       NumArgs = TemplateArgs.size();
     }
     IncludeStrongLifetimeRAII Strong(Policy);
-    TemplateSpecializationType::PrintTemplateArgumentList(OS,
-                                                          Args, NumArgs,
-                                                          Policy);
+    PrintTemplateArgumentList(OS, Args, NumArgs);
   }
 
   spaceBeforePlaceHolder(OS);
@@ -969,10 +1050,9 @@ void TypePrinter::printTemplateSpecializationBefore(
   IncludeStrongLifetimeRAII Strong(Policy);
   T->getTemplateName().print(OS, Policy);
   
-  TemplateSpecializationType::PrintTemplateArgumentList(OS,
-                                                        T->getArgs(), 
-                                                        T->getNumArgs(), 
-                                                        Policy);
+  PrintTemplateArgumentList(OS,
+                T->getArgs(),
+                T->getNumArgs());
   spaceBeforePlaceHolder(OS);
 }
 void TypePrinter::printTemplateSpecializationAfter(
@@ -1044,10 +1124,9 @@ void TypePrinter::printDependentTemplateSpecializationBefore(
   if (T->getQualifier())
     T->getQualifier()->print(OS, Policy);    
   OS << T->getIdentifier()->getName();
-  TemplateSpecializationType::PrintTemplateArgumentList(OS,
-                                                        T->getArgs(),
-                                                        T->getNumArgs(),
-                                                        Policy);
+  PrintTemplateArgumentList(OS,
+                          T->getArgs(),
+                          T->getNumArgs());
   spaceBeforePlaceHolder(OS);
 }
 void TypePrinter::printDependentTemplateSpecializationAfter(
@@ -1257,5 +1336,133 @@ void TypePrinter::printObjCObjectPointerBefore(const ObjCObjectPointerType *T,
 }
 void TypePrinter::printObjCObjectPointerAfter(const ObjCObjectPointerType *T, 
                                               raw_ostream &OS) { }
+
+static void printIntegral(const TemplateArgument &TemplArg,
+                          raw_ostream &Out) {
+  const ::clang::Type *T = TemplArg.getIntegralType().getTypePtr();
+  const llvm::APSInt &Val = TemplArg.getAsIntegral();
+
+  if (T->isBooleanType()) {
+    Out << (Val.getBoolValue() ? "true" : "false");
+  } else if (T->isCharType()) {
+    const char Ch = Val.getZExtValue();
+    Out << ((Ch == '\'') ? "'\\" : "'");
+    Out.write_escaped(StringRef(&Ch, 1), /*UseHexEscapes=*/ true);
+    Out << "'";
+  } else {
+    Out << Val;
+  }
+}
+
+void TypePrinter::PrintTemplateArgument(const TemplateArgument &A,
+                             raw_ostream &Out) {
+  switch (A.getKind()) {
+  case TemplateArgument::Null:
+    Out << "<no value>";
+    break;
+
+  case TemplateArgument::Type: {
+    IncludeStrongLifetimeRAII Strong(Policy);
+    print(A.getAsType(), Out, "");
+    break;
+  }
+
+  case TemplateArgument::Declaration: {
+    NamedDecl *ND = cast<NamedDecl>(A.getAsDecl());
+    Out << '&';
+    if (ND->getDeclName()) {
+      // FIXME: distinguish between pointer and reference args?
+      ND->printQualifiedName(Out);
+    } else {
+      Out << "<anonymous>";
+    }
+    break;
+  }
+
+  case TemplateArgument::NullPtr:
+    Out << "nullptr";
+    break;
+
+  case TemplateArgument::Template:
+    A.getAsTemplate().print(Out, Policy);
+    break;
+
+  case TemplateArgument::TemplateExpansion:
+    A.getAsTemplateOrTemplatePattern().print(Out, Policy);
+    Out << "...";
+    break;
+
+  case TemplateArgument::Integral: {
+    printIntegral(A, Out);
+    break;
+  }
+
+  case TemplateArgument::Expression:
+    A.getAsExpr()->printPretty(Out, 0, Policy);
+    break;
+
+  case TemplateArgument::Pack:
+    Out << "<";
+    bool First = true;
+    for (TemplateArgument::pack_iterator P = A.pack_begin(), PEnd = A.pack_end();
+         P != PEnd; ++P) {
+      if (First)
+        First = false;
+      else
+        Out << ", ";
+
+      P->print(Policy, Out);
+    }
+    Out << ">";
+    break;
+  }
+}
+
+void TypePrinter::PrintTemplateArgumentList(
+                                          raw_ostream &OS,
+                                          const TemplateArgument *Args,
+                                          unsigned NumArgs,
+                                          bool SkipBrackets) {
+  if (!SkipBrackets)
+    OS << '<';
+
+  bool needSpace = false;
+  for (unsigned Arg = 0; Arg < NumArgs; ++Arg) {
+    if (Arg > 0)
+      OS << ", ";
+
+    // Print the argument into a string.
+    SmallString<128> Buf;
+    llvm::raw_svector_ostream ArgOS(Buf);
+    if (Args[Arg].getKind() == TemplateArgument::Pack) {
+      PrintTemplateArgumentList(ArgOS,
+                                Args[Arg].pack_begin(),
+                                Args[Arg].pack_size(),
+                                true);
+    } else {
+      PrintTemplateArgument(Args[Arg], ArgOS);
+    }
+    StringRef ArgString = ArgOS.str();
+
+    // If this is the first argument and its string representation
+    // begins with the global scope specifier ('::foo'), add a space
+    // to avoid printing the diagraph '<:'.
+    if (!Arg && !ArgString.empty() && ArgString[0] == ':')
+      OS << ' ';
+
+    OS << ArgString;
+
+    needSpace = (!ArgString.empty() && ArgString.back() == '>');
+  }
+
+  // If the last character of our string is '>', add another space to
+  // keep the two '>''s separate tokens. We don't *have* to do this in
+  // C++0x, but it's still good hygiene.
+  if (needSpace)
+    OS << ' ';
+
+  if (!SkipBrackets)
+    OS << '>';
+}
 
 }

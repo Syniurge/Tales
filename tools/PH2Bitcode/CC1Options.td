@@ -208,6 +208,8 @@ def mlink_bitcode_file : Separate<["-"], "mlink-bitcode-file">,
 // Tales
 def input_constraint : Separate<["-"], "input-constraint">,
   HelpText<"(Tales) Only preserve declarations inside this file or folder.">;
+def pseudoheader_whitelist : Separate<["-"], "pseudoheader-whitelist">,
+  HelpText<"(Tales) Pseudo-header containing declarations which are to be exposed in Tales.">;
 
 //===----------------------------------------------------------------------===//
 // Dependency Output Options
@@ -438,8 +440,6 @@ def ftemplate_depth : Separate<["-"], "ftemplate-depth">,
   HelpText<"Maximum depth of recursive template instantiation">;
 def fconstexpr_depth : Separate<["-"], "fconstexpr-depth">,
   HelpText<"Maximum depth of recursive constexpr function calls">;
-def fconstexpr_steps : Separate<["-"], "fconstexpr-steps">,
-  HelpText<"Maximum number of steps in constexpr function evaluation">;
 def fbracket_depth : Separate<["-"], "fbracket-depth">,
   HelpText<"Maximum nesting level for parentheses, brackets, and braces">;
 def fconst_strings : Flag<["-"], "fconst-strings">,

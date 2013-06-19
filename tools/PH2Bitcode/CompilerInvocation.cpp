@@ -31,7 +31,6 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/system_error.h"
-#include <sys/stat.h>
 using namespace clang;
 
 //===----------------------------------------------------------------------===//
@@ -606,7 +605,7 @@ static void ParseFileSystemArgs(FileSystemOptions &Opts, ArgList &Args) {
 }
 
 static InputKind ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
-                                   DiagnosticsEngine &Diags) {
+                                   DiagnosticsEngine &Diags, bool &Success) {
   using namespace options;
   Opts.ProgramAction = frontend::ParseSyntaxOnly;
   if (const Arg *A = Args.getLastArg(OPT_Action_Group)) {
@@ -799,6 +798,13 @@ static InputKind ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     if (DashX == IK_None)
       Diags.Report(diag::err_drv_invalid_value)
         << A->getAsString(Args) << A->getValue();
+  }
+
+  // For Tales
+  Opts.PHFileName = Args.getLastArgValue(OPT_pseudoheader_whitelist);
+  if (!Opts.PHFileName.empty() && !llvm::sys::fs::exists(Opts.PHFileName)) {
+    Diags.Report(diag::err_cannot_open_file) << Opts.PHFileName;
+    Success = false;
   }
 
   // '-' is the default input if none is given.
@@ -1258,8 +1264,6 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
                                                     Diags);
   Opts.ConstexprCallDepth = Args.getLastArgIntValue(OPT_fconstexpr_depth, 512,
                                                     Diags);
-  Opts.ConstexprStepLimit = Args.getLastArgIntValue(OPT_fconstexpr_steps,
-                                                    1048576, Diags);
   Opts.BracketDepth = Args.getLastArgIntValue(OPT_fbracket_depth, 256, Diags);
   Opts.DelayedTemplateParsing = Args.hasArg(OPT_fdelayed_template_parsing);
   Opts.NumLargeByValueCopy = Args.getLastArgIntValue(OPT_Wlarge_by_value_copy_EQ,
@@ -1565,7 +1569,7 @@ bool CompilerInvocation::CreateFromArgs(CompilerInvocation &Res,
   ParseCommentArgs(Res.getLangOpts()->CommentOpts, *Args);
   ParseFileSystemArgs(Res.getFileSystemOpts(), *Args);
   // FIXME: We shouldn't have to pass the DashX option around here
-  InputKind DashX = ParseFrontendArgs(Res.getFrontendOpts(), *Args, Diags);
+  InputKind DashX = ParseFrontendArgs(Res.getFrontendOpts(), *Args, Diags, Success);
   Success = ParseCodeGenArgs(Res.getCodeGenOpts(), *Args, DashX, Diags)
             && Success;
   ParseHeaderSearchArgs(Res.getHeaderSearchOpts(), *Args);
@@ -1696,8 +1700,7 @@ std::string CompilerInvocation::getModuleHash() const {
                       hsOpts.UseStandardCXXIncludes,
                       hsOpts.UseLibcxx);
 
-  // Darwin-specific hack: if we have a sysroot, use the contents and
-  // modification time of
+  // Darwin-specific hack: if we have a sysroot, use the contents of
   //   $sysroot/System/Library/CoreServices/SystemVersion.plist
   // as part of the module hash.
   if (!hsOpts.Sysroot.empty()) {
@@ -1710,10 +1713,6 @@ std::string CompilerInvocation::getModuleHash() const {
     llvm::sys::path::append(systemVersionFile, "SystemVersion.plist");
     if (!llvm::MemoryBuffer::getFile(systemVersionFile, buffer)) {
       code = hash_combine(code, buffer.get()->getBuffer());
-
-      struct stat statBuf;
-      if (stat(systemVersionFile.c_str(), &statBuf) == 0)
-        code = hash_combine(code, statBuf.st_mtime);
     }
   }
 

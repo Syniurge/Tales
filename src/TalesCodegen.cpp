@@ -886,6 +886,6 @@ namespace Tales {
 			return context.builder.CreateCall(context.talesModule.AssignRuntimeTF, AssignRuntimeTA);
 		}
 		
-		return ErrorV("Assignment FIXME");
+		llvm_unreachable("Assignment FIXME");
 	}
 }

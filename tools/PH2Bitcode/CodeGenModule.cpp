@@ -70,10 +70,11 @@ static CGCXXABI &createCXXABI(CodeGenModule &CGM) {
 
 CodeGenModule::CodeGenModule(ASTContext &C, const CodeGenOptions &CGO,
                              llvm::Module &M, const llvm::DataLayout &TD,
-                             DiagnosticsEngine &diags)
+                             DiagnosticsEngine &diags, bool WhitelistedOnly)
   : Context(C), LangOpts(C.getLangOpts()), CodeGenOpts(CGO), TheModule(M),
     Diags(diags), TheDataLayout(TD), Target(C.getTargetInfo()),
-    ABI(createCXXABI(*this)), VMContext(M.getContext()), TBAA(0),
+    ABI(createCXXABI(*this)), VMContext(M.getContext()),
+    WhitelistedOnly(WhitelistedOnly), TBAA(0),
     TheTargetCodeGenInfo(0), Types(*this), VTables(*this),
     ObjCRuntime(0), OpenCLRuntime(0), CUDARuntime(0),
     DebugInfo(0), ARCData(0), NoObjCARCExceptionsMetadata(0),
@@ -186,8 +187,7 @@ void CodeGenModule::Release() {
   EmitStaticExternCAliases();
   EmitLLVMUsed();
 
-  if (CodeGenOpts.Autolink &&
-      (Context.getLangOpts().Modules || !LinkerOptionsMetadata.empty())) {
+  if (CodeGenOpts.Autolink && Context.getLangOpts().Modules) {
     EmitModuleLinkOptions();
   }
 
@@ -598,65 +598,60 @@ static bool hasUnwindExceptions(const LangOptions &LangOpts) {
 
 void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
                                                            llvm::Function *F) {
-  llvm::AttrBuilder B;
-
   if (CodeGenOpts.UnwindTables)
-    B.addAttribute(llvm::Attribute::UWTable);
+    F->setHasUWTable();
 
   if (!hasUnwindExceptions(LangOpts))
-    B.addAttribute(llvm::Attribute::NoUnwind);
+    F->addFnAttr(llvm::Attribute::NoUnwind);
 
   if (D->hasAttr<NakedAttr>()) {
     // Naked implies noinline: we should not be inlining such functions.
-    B.addAttribute(llvm::Attribute::Naked);
-    B.addAttribute(llvm::Attribute::NoInline);
-  } else if (D->hasAttr<NoInlineAttr>()) {
-    B.addAttribute(llvm::Attribute::NoInline);
-  } else if ((D->hasAttr<AlwaysInlineAttr>() ||
-              D->hasAttr<ForceInlineAttr>()) &&
-             !F->getAttributes().hasAttribute(llvm::AttributeSet::FunctionIndex,
-                                              llvm::Attribute::NoInline)) {
-    // (noinline wins over always_inline, and we can't specify both in IR)
-    B.addAttribute(llvm::Attribute::AlwaysInline);
+    F->addFnAttr(llvm::Attribute::Naked);
+    F->addFnAttr(llvm::Attribute::NoInline);
   }
 
-  if (D->hasAttr<ColdAttr>()) {
-    B.addAttribute(llvm::Attribute::OptimizeForSize);
-    B.addAttribute(llvm::Attribute::Cold);
-  }
+  if (D->hasAttr<NoInlineAttr>())
+    F->addFnAttr(llvm::Attribute::NoInline);
+
+  // (noinline wins over always_inline, and we can't specify both in IR)
+  if ((D->hasAttr<AlwaysInlineAttr>() || D->hasAttr<ForceInlineAttr>()) &&
+      !F->getAttributes().hasAttribute(llvm::AttributeSet::FunctionIndex,
+                                       llvm::Attribute::NoInline))
+    F->addFnAttr(llvm::Attribute::AlwaysInline);
+
+  // FIXME: Communicate hot and cold attributes to LLVM more directly.
+  if (D->hasAttr<ColdAttr>())
+    F->addFnAttr(llvm::Attribute::OptimizeForSize);
 
   if (D->hasAttr<MinSizeAttr>())
-    B.addAttribute(llvm::Attribute::MinSize);
+    F->addFnAttr(llvm::Attribute::MinSize);
+
+  if (isa<CXXConstructorDecl>(D) || isa<CXXDestructorDecl>(D))
+    F->setUnnamedAddr(true);
+
+  if (const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(D))
+    if (MD->isVirtual())
+      F->setUnnamedAddr(true);
 
   if (LangOpts.getStackProtector() == LangOptions::SSPOn)
-    B.addAttribute(llvm::Attribute::StackProtect);
+    F->addFnAttr(llvm::Attribute::StackProtect);
   else if (LangOpts.getStackProtector() == LangOptions::SSPReq)
-    B.addAttribute(llvm::Attribute::StackProtectReq);
+    F->addFnAttr(llvm::Attribute::StackProtectReq);
 
   // Add sanitizer attributes if function is not blacklisted.
   if (!SanitizerBlacklist.isIn(*F)) {
     // When AddressSanitizer is enabled, set SanitizeAddress attribute
     // unless __attribute__((no_sanitize_address)) is used.
     if (SanOpts.Address && !D->hasAttr<NoSanitizeAddressAttr>())
-      B.addAttribute(llvm::Attribute::SanitizeAddress);
+      F->addFnAttr(llvm::Attribute::SanitizeAddress);
     // Same for ThreadSanitizer and __attribute__((no_sanitize_thread))
     if (SanOpts.Thread && !D->hasAttr<NoSanitizeThreadAttr>()) {
-      B.addAttribute(llvm::Attribute::SanitizeThread);
+      F->addFnAttr(llvm::Attribute::SanitizeThread);
     }
     // Same for MemorySanitizer and __attribute__((no_sanitize_memory))
     if (SanOpts.Memory && !D->hasAttr<NoSanitizeMemoryAttr>())
-      B.addAttribute(llvm::Attribute::SanitizeMemory);
+      F->addFnAttr(llvm::Attribute::SanitizeMemory);
   }
-
-  F->addAttributes(llvm::AttributeSet::FunctionIndex,
-                   llvm::AttributeSet::get(
-                       F->getContext(), llvm::AttributeSet::FunctionIndex, B));
-
-  if (isa<CXXConstructorDecl>(D) || isa<CXXDestructorDecl>(D))
-    F->setUnnamedAddr(true);
-  else if (const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(D))
-    if (MD->isVirtual())
-      F->setUnnamedAddr(true);
 
   unsigned alignment = D->getMaxAlignment() / Context.getCharWidth();
   if (alignment)
@@ -768,41 +763,31 @@ void CodeGenModule::EmitLLVMUsed() {
   GV->setSection("llvm.metadata");
 }
 
-void CodeGenModule::AppendLinkerOptions(StringRef Opts) {
-  llvm::Value *MDOpts = llvm::MDString::get(getLLVMContext(), Opts);
-  LinkerOptionsMetadata.push_back(llvm::MDNode::get(getLLVMContext(), MDOpts));
-}
-
-void CodeGenModule::AddDependentLib(StringRef Lib) {
-  llvm::SmallString<24> Opt;
-  getTargetCodeGenInfo().getDependentLibraryOption(Lib, Opt);
-  llvm::Value *MDOpts = llvm::MDString::get(getLLVMContext(), Opt);
-  LinkerOptionsMetadata.push_back(llvm::MDNode::get(getLLVMContext(), MDOpts));
-}
-
 /// \brief Add link options implied by the given module, including modules
 /// it depends on, using a postorder walk.
-static void addLinkOptionsPostorder(CodeGenModule &CGM,
+static void addLinkOptionsPostorder(llvm::LLVMContext &Context,
                                     Module *Mod,
                                     SmallVectorImpl<llvm::Value *> &Metadata,
                                     llvm::SmallPtrSet<Module *, 16> &Visited) {
   // Import this module's parent.
   if (Mod->Parent && Visited.insert(Mod->Parent)) {
-    addLinkOptionsPostorder(CGM, Mod->Parent, Metadata, Visited);
+    addLinkOptionsPostorder(Context, Mod->Parent, Metadata, Visited);
   }
 
   // Import this module's dependencies.
   for (unsigned I = Mod->Imports.size(); I > 0; --I) {
     if (Visited.insert(Mod->Imports[I-1]))
-      addLinkOptionsPostorder(CGM, Mod->Imports[I-1], Metadata, Visited);
+      addLinkOptionsPostorder(Context, Mod->Imports[I-1], Metadata, Visited);
   }
 
   // Add linker options to link against the libraries/frameworks
   // described by this module.
-  llvm::LLVMContext &Context = CGM.getLLVMContext();
   for (unsigned I = Mod->LinkLibraries.size(); I > 0; --I) {
-    // Link against a framework.  Frameworks are currently Darwin only, so we
-    // don't to ask TargetCodeGenInfo for the spelling of the linker option.
+    // FIXME: -lfoo is Unix-centric and -framework Foo is Darwin-centric.
+    // We need to know more about the linker to know how to encode these
+    // options propertly.
+
+    // Link against a framework.
     if (Mod->LinkLibraries[I-1].IsFramework) {
       llvm::Value *Args[2] = {
         llvm::MDString::get(Context, "-framework"),
@@ -814,10 +799,9 @@ static void addLinkOptionsPostorder(CodeGenModule &CGM,
     }
 
     // Link against a library.
-    llvm::SmallString<24> Opt;
-    CGM.getTargetCodeGenInfo().getDependentLibraryOption(
-      Mod->LinkLibraries[I-1].Library, Opt);
-    llvm::Value *OptString = llvm::MDString::get(Context, Opt);
+    llvm::Value *OptString
+    = llvm::MDString::get(Context,
+                          "-l" + Mod->LinkLibraries[I-1].Library);
     Metadata.push_back(llvm::MDNode::get(Context, OptString));
   }
 }
@@ -869,23 +853,20 @@ void CodeGenModule::EmitModuleLinkOptions() {
   }
 
   // Add link options for all of the imported modules in reverse topological
-  // order.  We don't do anything to try to order import link flags with respect
-  // to linker options inserted by things like #pragma comment().
+  // order.
   SmallVector<llvm::Value *, 16> MetadataArgs;
   Visited.clear();
   for (llvm::SetVector<clang::Module *>::iterator M = LinkModules.begin(),
                                                MEnd = LinkModules.end();
        M != MEnd; ++M) {
     if (Visited.insert(*M))
-      addLinkOptionsPostorder(*this, *M, MetadataArgs, Visited);
+      addLinkOptionsPostorder(getLLVMContext(), *M, MetadataArgs, Visited);
   }
   std::reverse(MetadataArgs.begin(), MetadataArgs.end());
-  LinkerOptionsMetadata.append(MetadataArgs.begin(), MetadataArgs.end());
 
   // Add the linker options metadata flag.
   getModule().addModuleFlag(llvm::Module::AppendUnique, "Linker Options",
-                            llvm::MDNode::get(getLLVMContext(),
-                                              LinkerOptionsMetadata));
+                            llvm::MDNode::get(getLLVMContext(), MetadataArgs));
 }
 
 void CodeGenModule::EmitDeferred() {
@@ -1008,7 +989,7 @@ void CodeGenModule::AddGlobalAnnotations(const ValueDecl *D,
 
 bool CodeGenModule::MayDeferGeneration(const ValueDecl *Global) {
   // Never defer when EmitAllDecls is specified.
-  if (LangOpts.EmitAllDecls)
+  if (LangOpts.EmitAllDecls || Global->isLate())
     return false;
 
   return !getContext().DeclMustBeEmitted(Global);
@@ -1119,8 +1100,23 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
   if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(Global)) {
     // Forward declarations are emitted lazily on first use.
     if (!FD->doesThisDeclarationHaveABody()) {
-      if (!FD->doesDeclarationForceExternallyVisibleDefinition())
+      if (!FD->doesDeclarationForceExternallyVisibleDefinition()) {
+        // Emit forward (top level) function declarations for Tales at the end
+        // of the translation unit, once we're sure all types are complete.
+        if (FD->isLate()) { // TODO: would be handy for TalesRuntime.c too.
+          const CGFunctionInfo *FI;
+          if (const CXXConstructorDecl *CD = dyn_cast<CXXConstructorDecl>(FD))
+            FI = &getTypes().arrangeCXXConstructorDeclaration(CD, GD.getCtorType());
+          else if (const CXXDestructorDecl *DD = dyn_cast<CXXDestructorDecl>(FD))
+            FI = &getTypes().arrangeCXXDestructor(DD, GD.getDtorType());
+          else
+            FI = &getTypes().arrangeFunctionDeclaration(FD);
+
+          llvm::FunctionType *Ty = getTypes().GetFunctionType(*FI);
+          GetAddrOfFunction(GD, Ty);
+        }
         return;
+      }
 
       const FunctionDecl *InlineDefinition = 0;
       FD->getBody(InlineDefinition);
@@ -1237,23 +1233,6 @@ CodeGenModule::shouldEmitFunction(const FunctionDecl *F) {
   return !isTriviallyRecursive(F);
 }
 
-/// If the type for the method's class was generated by
-/// CGDebugInfo::createContextChain(), the cache contains only a
-/// limited DIType without any declarations. Since EmitFunctionStart()
-/// needs to find the canonical declaration for each method, we need
-/// to construct the complete type prior to emitting the method.
-void CodeGenModule::CompleteDIClassType(const CXXMethodDecl* D) {
-  if (!D->isInstance())
-    return;
-
-  if (CGDebugInfo *DI = getModuleDebugInfo())
-    if (getCodeGenOpts().getDebugInfo() >= CodeGenOptions::LimitedDebugInfo) {
-      const PointerType *ThisPtr =
-        cast<PointerType>(D->getThisType(getContext()));
-      DI->getOrCreateRecordType(ThisPtr->getPointeeType(), D->getLocation());
-    }
-}
-
 void CodeGenModule::EmitGlobalDefinition(GlobalDecl GD) {
   const ValueDecl *D = cast<ValueDecl>(GD.getDecl());
 
@@ -1268,7 +1247,6 @@ void CodeGenModule::EmitGlobalDefinition(GlobalDecl GD) {
       return;
 
     if (const CXXMethodDecl *Method = dyn_cast<CXXMethodDecl>(D)) {
-      CompleteDIClassType(Method);
       // Make sure to emit the definition(s) before we emit the thunks.
       // This is necessary for the generation of certain thunks.
       if (const CXXConstructorDecl *CD = dyn_cast<CXXConstructorDecl>(Method))
@@ -1764,7 +1742,7 @@ void CodeGenModule::MaybeHandleStaticInExternC(const SomeDecl *D,
     return;
 
   // Must have internal linkage and an ordinary name.
-  if (!D->getIdentifier() || D->getFormalLinkage() != InternalLinkage)
+  if (!D->getIdentifier() || D->getLinkage() != InternalLinkage)
     return;
 
   // Must be in an extern "C" context. Entities declared directly within
@@ -1938,13 +1916,7 @@ CodeGenModule::GetLLVMLinkageVarDefinition(const VarDecl *D,
     return llvm::Function::DLLImportLinkage;
   else if (D->hasAttr<DLLExportAttr>())
     return llvm::Function::DLLExportLinkage;
-  else if (D->hasAttr<SelectAnyAttr>()) {
-    // selectany symbols are externally visible, so use weak instead of
-    // linkonce.  MSVC optimizes away references to const selectany globals, so
-    // all definitions should be the same and ODR linkage should be used.
-    // http://msdn.microsoft.com/en-us/library/5tkz6s71.aspx
-    return llvm::GlobalVariable::WeakODRLinkage;
-  } else if (D->hasAttr<WeakAttr>()) {
+  else if (D->hasAttr<WeakAttr>()) {
     if (GV->isConstant())
       return llvm::GlobalVariable::WeakODRLinkage;
     else
@@ -2837,6 +2809,25 @@ void CodeGenModule::EmitLinkageSpec(const LinkageSpecDecl *LSD) {
   }
 }
 
+bool CodeGenModule::ShouldEmit(const Decl* D) const {
+  const NamedDecl *ND = dyn_cast<NamedDecl>(D);
+
+  if (!WhitelistedOnly || !ND)
+    return true;
+
+  bool IsWhitelisted = ND->isWhitelisted();
+  if (isa<NamespaceDecl>(D))
+    IsWhitelisted = cast<NamespaceDecl>(D)->getOriginalNamespace()->isWhitelisted();
+
+  if (!IsWhitelisted) {
+    llvm::errs() << "DISCARDED: " << ND->getName() << " of kind " << ND->getDeclKindName() << "\n";
+    return false;
+  } else
+    llvm::errs() << "WHITELISTED: " << ND->getName() << " of kind " << ND->getDeclKindName() << "\n";
+
+  return true;
+}
+
 /// EmitTopLevelDecl - Emit code for a single top level declaration.
 void CodeGenModule::EmitTopLevelDecl(Decl *D) {
   // If an error has occurred, stop code generation, but continue
@@ -2849,12 +2840,15 @@ void CodeGenModule::EmitTopLevelDecl(Decl *D) {
   if (D->getDeclContext() && D->getDeclContext()->isDependentContext())
     return;
 
+  if (!ShouldEmit(D))
+    return;
+
   switch (D->getKind()) {
-    // NOTE: For Tales!
   case Decl::Record:
   case Decl::CXXRecord:
-    if (cast<RecordDecl>(D)->isThisDeclarationADefinition())
-      Types.ConvertRecordDeclType(cast<RecordDecl>(D));
+  case Decl::ClassTemplateSpecialization:
+  case Decl::ClassTemplatePartialSpecialization:
+    Types.ConvertRecordDeclType(cast<RecordDecl>(D));
     break;
 
   case Decl::CXXConversion:
@@ -2887,13 +2881,10 @@ void CodeGenModule::EmitTopLevelDecl(Decl *D) {
   case Decl::ClassTemplate:
   case Decl::FunctionTemplate:
   case Decl::TypeAliasTemplate:
+  case Decl::NamespaceAlias:
   case Decl::Block:
   case Decl::Empty:
     break;
-  case Decl::NamespaceAlias:
-    if (CGDebugInfo *DI = getModuleDebugInfo())
-        DI->EmitNamespaceAlias(cast<NamespaceAliasDecl>(*D));
-    return;
   case Decl::UsingDirective: // using namespace X; [C++]
     if (CGDebugInfo *DI = getModuleDebugInfo())
       DI->EmitUsingDirective(cast<UsingDirectiveDecl>(*D));
