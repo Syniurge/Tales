@@ -16,9 +16,9 @@ The output isn't 100% perfect yet, some special cases are still not handled by P
 
 (OgreMemorySTLAllocator.h)
 
-I have no idea what template<typename T> struct STLAllocatorBase<const T> exactly is
+I have no idea what template\<typename T\> struct STLAllocatorBase\<const T\> exactly is
 in C++ terms (is it a template specialization?). I should ask Ogre devs.
-Vanilla DeclPrinter just prints:
+Vanilla DeclPrinter only prints:
 
 	struct STLAllocatorBase { ... };
 
