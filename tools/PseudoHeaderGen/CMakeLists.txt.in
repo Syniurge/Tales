@@ -9,5 +9,4 @@ add_clang_executable(TalesPseudoHeaderGen
 target_link_libraries(TalesPseudoHeaderGen
   clangTooling
   clangBasic
-  clangASTMatchers
   )

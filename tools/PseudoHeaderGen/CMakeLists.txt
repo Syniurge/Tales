@@ -11,9 +11,6 @@ list(APPEND PHG_SOURCE_FILES
 
 set(CLANG_TOOLS_EXTRA_DIR "${PATH_TO_LLVM_SOURCE}/tools/clang/tools/extra")
 
-add_custom_command(OUTPUT "${CLANG_TOOLS_EXTRA_DIR}/TalesPseudoHeaderGen"
-	COMMAND ${CMAKE_COMMAND} -E make_directory "${CLANG_TOOLS_EXTRA_DIR}/TalesPseudoHeaderGen")
-
 foreach(PHG_SOURCE_FILE IN LISTS PHG_SOURCE_FILES)
 	set(PHG_LLVM_FILE "${CLANG_TOOLS_EXTRA_DIR}/TalesPseudoHeaderGen/${PHG_SOURCE_FILE}")
 	if (PHG_SOURCE_FILE STREQUAL "CMakeLists.txt.in")
@@ -22,17 +19,19 @@ foreach(PHG_SOURCE_FILE IN LISTS PHG_SOURCE_FILES)
 
 	if(UNIX)
 		add_custom_command(OUTPUT ${PHG_LLVM_FILE}
+			COMMAND ${CMAKE_COMMAND} -E make_directory
+				"${CLANG_TOOLS_EXTRA_DIR}/TalesPseudoHeaderGen"
 			COMMAND ${CMAKE_COMMAND} -E create_symlink
 				"${CMAKE_CURRENT_SOURCE_DIR}/${PHG_SOURCE_FILE}"
-				"${PHG_LLVM_FILE}"
-			DEPENDS "${CLANG_TOOLS_EXTRA_DIR}/TalesPseudoHeaderGen")
+				"${PHG_LLVM_FILE}")
 	else()
 		add_custom_command(OUTPUT ${PHG_LLVM_FILE}
+			COMMAND ${CMAKE_COMMAND} -E make_directory
+				"${CLANG_TOOLS_EXTRA_DIR}/TalesPseudoHeaderGen"
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different
 				"${CMAKE_CURRENT_SOURCE_DIR}/${PHG_SOURCE_FILE}"
 				"${PHG_LLVM_FILE}"
-			DEPENDS ${PHG_SOURCE_FILE}
-				"${CLANG_TOOLS_EXTRA_DIR}/TalesPseudoHeaderGen")
+			DEPENDS ${PHG_SOURCE_FILE})
 	endif()
 
 	list(APPEND PHG_LLVM_FILES "${PHG_LLVM_FILE}")
