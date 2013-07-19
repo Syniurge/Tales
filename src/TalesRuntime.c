@@ -1,7 +1,10 @@
 /*
- * TalesRuntime.c - To save the trouble of IR creation for complex operations like finding a pair in a table, we use simpler C11 code compiled by Clang into LLVM IR.
- * 		The resulting IR is then parsed through llvm::ParseIR() to retrieve the struct types e.g for the GEP instructions and malloc calls.
- * 		LLVM inlines many of these functions, so the CFG simplification ensures that the generated IR is almost the same it would be than if we were generating it manually.
+ * TalesRuntime.c - To save the trouble of IR creation for complex operations such as
+ * 		finding a pair in a table, we use simpler C11 code compiled by Clang into LLVM IR.
+ * 		The resulting IR is then parsed through llvm::ParseIR() to retrieve the struct types
+ * 		e.g for the GEP instructions and malloc calls.
+ * 		LLVM inlines many of these functions, so the CFG simplification ensures that the
+ * 		generated IR is almost the same it would be than if we were generating it manually.
  */
 
 /*
@@ -47,11 +50,12 @@ struct __TalesGlobalContext {
 struct __TalesGlobalContext globalContext;
 
 // Float-Pointer union
-union __TalesFPU { void* p; Number n; };
+union __TalesFPU { void* p; __TalesNumber n; };
 
 struct __TalesDynamicValue {
 	enum __TalesTypeIndex typeIdx;
-	union __TalesFPU value; // an union is needed to ensure the pointer size is big enough to hold a float and inversely
+	union __TalesFPU value; // an union is needed to ensure the pointer size is
+							// big enough to hold a float and inversely
 };
 
 struct __TalesChainPair {
@@ -61,14 +65,18 @@ struct __TalesChainPair {
 	struct __TalesChainPair* next;
 };
 
-// Once an identifier cannot go further in the struct tree, GEP won't help anymore and the struct info/fields must be available for runtime lookups
+// Once an identifier cannot go further in the struct tree, GEP won't help anymore
+// and the struct info/fields must be available for runtime lookups.
 struct __TalesStructField {
 	char* name;
 	enum __TalesTypeIndex typeIdx;
-	ptrdiff_t offset; // from the header (NOTE: there's no way to determine the offset of the spairs if you don't know the full table type, i.e not just the header, since it varies with the alignment)
+	ptrdiff_t offset; // from the header (NOTE: there's no way to determine the offset
+			// of the spairs if you don't know the full table type, i.e not just the header,
+			// since it varies with the alignment)
 };
 
-struct __TalesTableHeader { // NOTE: The real LLVM structure used to allocate Tables is { { header }, { spairs } } where spairs differs from one table to another
+struct __TalesTableHeader { // NOTE: The real LLVM structure used to allocate Tables is
+				// { { header }, { spairs } } where spairs differs from one table to another.
 	// First chain pair (simply "pair" to keep Lua terms)
 	struct __TalesChainPair* firstPair;
 
@@ -81,7 +89,8 @@ struct __TalesTableHeader { // NOTE: The real LLVM structure used to allocate Ta
 	struct __TalesStructField* spairs;
 };
 
-// NOTE: the pointer to the class declaration is fixed at compilation time, including for return values which are functions/closures
+// NOTE: the pointer to the class declaration is fixed at compilation time, including
+// for return values which are functions/closures.
 struct __TalesClassDeclaration {
 	unsigned int fieldCount;
 	struct __TalesStructField* fields;
@@ -92,11 +101,15 @@ struct __TalesClassHeader {
 	struct __TalesChainPair* firstCPair;
 };
 
-struct __TalesFunctionValue { // { __TalesTypeIndex, unsigned int, void* } typearg1 typearg2 ... (they follow but are outside the structure)
+struct __TalesFunctionValue { // { __TalesTypeIndex, unsigned int, void* } typearg1 typearg2 ...
+			// (they follow but are outside the structure)
 	enum __TalesTypeIndex retTy;
 
 	void* function;
-	void* agnosticFunc; // "glue" function that takes dynamic values as parameters and returns one as well, this is necessary as there's no way to determine which CheckAndConvert function to use at compilation time in a call to a non-s-reachable function (LLVM is rather strict on types, and there are good reasons for that).
+	void* agnosticFunc; // "glue" function that takes dynamic values as parameters and
+			// returns one as well, this is necessary as there's no way to determine which
+			// CheckAndConvert function to use at compilation time in a call to a non-s-reachable
+			// function (LLVM is rather strict on types, and there are good reasons for that).
 
 	unsigned int argCount;
 };
@@ -106,13 +119,13 @@ INLINE void __TalesGlobalContextInit() {
 	globalContext.classes = NULL;
 }
 
-INLINE char* __TalesNtoS(Number n) {
+INLINE char* __TalesNtoS(__TalesNumber n) {
 	char sprintfBuffer[NUM2STR_DIGITS+4];
 	snprintf(sprintfBuffer, NUM2STR_DIGITS+3, "%."STR(NUM2STR_DIGITS)"g", n);
 	return strdup(sprintfBuffer);
 }
 
-INLINE Number __TalesDVtoN(struct __TalesDynamicValue dv) {
+INLINE __TalesNumber __TalesDVtoN(struct __TalesDynamicValue dv) {
 	if (dv.typeIdx == TYPEIDX_NUMBER)
 		return dv.value.n;
 	else if (dv.typeIdx == TYPEIDX_STRING)
@@ -150,11 +163,15 @@ INLINE void* __TalesDVtoP(enum __TalesTypeIndex expectedTy, struct __TalesDynami
 }
 
 
-// NOTE: Many functions used to take a __TalesFPU union value as a parameter, so only one function was needed
-// But that meant ZExt-ing 32 bits floats to 64 bits values (i.e casting them to zero-filled 64 bits values) which was inefficient.
-// The only way out I can see is to split every function and get rid of all union parameters and return values
+// NOTE: Many functions used to take a __TalesFPU union value as a parameter,
+// so only one function was needed. But that meant ZExt-ing 32 bits floats to 64 bits
+// values (i.e casting them to zero-filled 64 bits values) which was inefficient.
+// The only way out I can see is to split every function and get rid of all union parameters
+// and return values
 
-INLINE_INTERNAL void __TalesAssign(void* lhs, enum __TalesTypeIndex* lhsType, bool isLhsDyn, union __TalesFPU rhs, enum __TalesTypeIndex rhsType) {
+INLINE_INTERNAL void __TalesAssign(void* lhs, enum __TalesTypeIndex* lhsType,
+																	 bool isLhsDyn, union __TalesFPU rhs,
+																	 enum __TalesTypeIndex rhsType) {
 	if (isLhsDyn) {
 		// LHS is a dynamic value
 		union __TalesFPU* lhsFPU = (union __TalesFPU*) lhs;
@@ -165,11 +182,11 @@ INLINE_INTERNAL void __TalesAssign(void* lhs, enum __TalesTypeIndex* lhsType, bo
 		// LHS is a statically-typed sfield, we'll have to perform the right conversions if needed
 
 		if (*lhsType == rhsType) {
-			if (rhsType == TYPEIDX_NUMBER) *(Number*) lhs = rhs.n;
+			if (rhsType == TYPEIDX_NUMBER) *(__TalesNumber*) lhs = rhs.n;
 			else if (rhsType == TYPEIDX_STRING) *(void**) lhs = strdup(rhs.p);
 			else *(void**) lhs = rhs.p;
 		} else if (*lhsType == TYPEIDX_NUMBER && rhsType == TYPEIDX_STRING) {
-			*(Number*) lhs = atof((const char *) rhs.p);
+			*(__TalesNumber*) lhs = atof((const char *) rhs.p);
 		} else if (*lhsType == TYPEIDX_STRING && rhsType == TYPEIDX_NUMBER) {
 			char sprintfBuffer[NUM2STR_DIGITS+4]; // hmm
 			snprintf(sprintfBuffer, NUM2STR_DIGITS+3, "%."STR(NUM2STR_DIGITS)"g", rhs.n); // hmm
@@ -180,7 +197,8 @@ INLINE_INTERNAL void __TalesAssign(void* lhs, enum __TalesTypeIndex* lhsType, bo
 }
 
 
-INLINE_INTERNAL struct __TalesStructField* __TalesTableFindSPairS(struct __TalesTableHeader* header, const char* wanted) {
+INLINE_INTERNAL struct __TalesStructField*
+__TalesTableFindSPairS(struct __TalesTableHeader* header, const char* wanted) {
 	for (unsigned int i = 0; i < header->spairCount; ++i) {
 		if (strcmp(header->spairs[i].name, wanted) == 0)
 			return &header->spairs[i];
@@ -188,9 +206,12 @@ INLINE_INTERNAL struct __TalesStructField* __TalesTableFindSPairS(struct __Tales
 	return NULL;
 }
 
-// Look for the cpair named "wanted", this is called for the first level which we couldn't find a spair for, hence we don't need to test the spairs again, only for the next levels
-// for LHS identifiers in assignments, create the pair if it doesn't exist (NOTE: unlike Lua, Tales creates as many levels as needed, each level < lastLevel being created as a table)
-INLINE_INTERNAL struct __TalesDynamicValue* __TalesTableGetCPairS(struct __TalesTableHeader* header, const char* wanted, bool createPair) {
+// Look for the cpair named "wanted", this is called for the first level which we couldn't
+// find a spair for, hence we don't need to test the spairs again, only for the next levels.
+// for LHS identifiers in assignments, create the pair if it doesn't exist (NOTE: unlike Lua,
+// Tales creates as many levels as needed, each level < lastLevel being created as a table).
+INLINE_INTERNAL struct __TalesDynamicValue*
+__TalesTableGetCPairS(struct __TalesTableHeader* header, const char* wanted, bool createPair) {
 	struct __TalesChainPair* pair = header->firstPair,* prevPair = NULL;
 
 	while (pair != NULL) {
@@ -218,7 +239,9 @@ INLINE_INTERNAL struct __TalesDynamicValue* __TalesTableGetCPairS(struct __Tales
 }
 
 // Look for a spair, then for a cpair. And for LHS assignments, create a cpair if it doesn't exist.
-INLINE_INTERNAL void* __TalesTableGetLevel(struct __TalesTableHeader* header, const char* wanted, enum __TalesTypeIndex* typeIdx, bool createCPair) {
+INLINE_INTERNAL void* __TalesTableGetLevel(struct __TalesTableHeader* header,
+																					 const char* wanted, enum __TalesTypeIndex* typeIdx,
+																					 bool createCPair) {
 	// First look for a struct field
 	struct __TalesStructField* spairInfo = __TalesTableFindSPairS(header, wanted);
 
@@ -227,7 +250,8 @@ INLINE_INTERNAL void* __TalesTableGetLevel(struct __TalesTableHeader* header, co
 		return header + spairInfo->offset;
 	}
 
-	// Then among the chain pairs, or create it, typeIdx will always be TYPEIDX_NIL, to make the caller know it's a a pointer to a dynamic value
+	// Then among the chain pairs, or create it, typeIdx will always be TYPEIDX_NIL,
+	// to make the caller know it's a a pointer to a dynamic value.
 	*typeIdx = TYPEIDX_NIL;
 	return __TalesTableGetCPairS(header, wanted, createCPair);
 }
@@ -244,8 +268,11 @@ INLINE_INTERNAL struct __TalesTableHeader* __TalesNewPureTable() {
 }
 
 // A bit confused sir? Am I talking to myself?
-// Yes you CANNOT use the compiler once you reach a level without sfield because you cannot know the LHS type in advance for IR generation
-void __TalesAssignRuntimeT(struct __TalesTableHeader* lastSLevel, const char** remLevels, unsigned int numRemLevels, union __TalesFPU rhs, enum __TalesTypeIndex rhsType) {
+// Yes you CANNOT use the compiler once you reach a level without sfield because
+// you cannot know the LHS type in advance for IR generation
+void __TalesAssignRuntimeT(struct __TalesTableHeader* lastSLevel, const char** remLevels,
+													 unsigned int numRemLevels, union __TalesFPU rhs,
+													 enum __TalesTypeIndex rhsType) {
 	// Since the compiler just went through the spairs, we only look inside cpairs at this level
 	struct __TalesDynamicValue* lastSLevelPairDV = __TalesTableGetCPairS(lastSLevel, remLevels[0], true);
 
@@ -296,11 +323,13 @@ void __TalesAssignRuntimeT(struct __TalesTableHeader* lastSLevel, const char** r
 
 // NOTE: inlining GetT makes the inlining pass segfault
 // It's more straightforward than Assign, because we're expected to return a dynamic value
-struct __TalesDynamicValue __TalesGetT(struct __TalesTableHeader* lastSLevel, const char** remLevels, unsigned int numRemLevels) {
+struct __TalesDynamicValue __TalesGetT(struct __TalesTableHeader* lastSLevel,
+																			 const char** remLevels, unsigned int numRemLevels) {
 	struct __TalesDynamicValue NIL = { TYPEIDX_NIL, NULL };
 
 	// Since the compiler just went through the spairs, we only look inside cpairs at this level
-	struct __TalesDynamicValue* lastSLevelPairDV = __TalesTableGetCPairS(lastSLevel, remLevels[0], false);
+	struct __TalesDynamicValue* lastSLevelPairDV = __TalesTableGetCPairS(lastSLevel,
+																																			 remLevels[0], false);
 
 	if (!lastSLevelPairDV) {
 		fprintf(stderr, "Invalid identifier\n");
@@ -312,7 +341,8 @@ struct __TalesDynamicValue __TalesGetT(struct __TalesTableHeader* lastSLevel, co
 
 	for (unsigned int i = 1; i < numRemLevels; ++i) {
 		if (retVal.typeIdx != TYPEIDX_TABLE && retVal.typeIdx <= TYPEIDX_FUNCTION) {
-			fprintf(stderr, "Invalid identifier, level exists but isn't a class instance nor a table\n");
+			fprintf(stderr, "Invalid identifier, level exists but isn't a class instance "
+																	"nor a table\n");
 			return NIL;
 		}
 
@@ -341,7 +371,9 @@ struct __TalesDynamicValue __TalesGetT(struct __TalesTableHeader* lastSLevel, co
 }
 
 
-INLINE bool __TalesFunctionTypecheck(union __TalesFPU v, enum __TalesTypeIndex vTy, enum __TalesTypeIndex* vArgs, unsigned int argCount, enum __TalesTypeIndex* args) {
+INLINE bool __TalesFunctionTypecheck(union __TalesFPU v, enum __TalesTypeIndex vTy,
+																		 enum __TalesTypeIndex* vArgs, unsigned int argCount,
+																		 enum __TalesTypeIndex* args) {
 	if (vTy != TYPEIDX_FUNCTION)
 		return false;
 
@@ -353,7 +385,8 @@ INLINE bool __TalesFunctionTypecheck(union __TalesFPU v, enum __TalesTypeIndex v
 	}
 
 	for (unsigned int i = 0; i < argCount;++i) {
-		if ((vArgs[i] == TYPEIDX_NUMBER && args[i] == TYPEIDX_STRING) || (vArgs[i] == TYPEIDX_STRING && args[i] == TYPEIDX_NUMBER))
+		if ((vArgs[i] == TYPEIDX_NUMBER && args[i] == TYPEIDX_STRING)
+			|| (vArgs[i] == TYPEIDX_STRING && args[i] == TYPEIDX_NUMBER))
 			continue;
 
 		if (vArgs[i] != args[i]) {

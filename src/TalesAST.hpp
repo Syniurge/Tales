@@ -21,170 +21,271 @@
 #include <cstddef>
 #include <stdlib.h>
 
-#include <memory>
 #include <array>
 #include <map>
 #include <vector>
 #include <algorithm>
 
+#include <llvm/Support/Casting.h>
 #include <llvm/IR/Value.h>
 #include <llvm/IR/DerivedTypes.h>
 
+#include "TalesRTTI.hpp"
 #include "TalesRuntime.h"
 
 namespace Tales {
-	using namespace std;
-	using namespace llvm;
+	using std::string;
+	using std::vector;
+	using std::map;
+	using std::move;
+
+	using llvm::cast;
+	using llvm::dyn_cast;
 	
-	struct ASTContext; // parsing time
-	struct CodegenEnv;
+	struct ASTContext;
 	struct CodegenContext;
+	struct CodegenEnv;
 
-	struct Node {
-		virtual ~Node() {}
-		virtual Value* Codegen(CodegenContext& context) const = 0;
+	struct Node : public Base {
+		Node(ObjectKind K) : Base(K) {}
+		virtual llvm::Value* Codegen(CodegenContext& context) const = 0;
 	};
 
-	struct NExpression : public Node {
+	struct Expression : public Node {
+		Expression(ObjectKind K) : Node(K) {}
 		virtual __TalesTypeIndex RuntimeType(CodegenEnv& env) const = 0;
-	};
-	struct NStatement : public Node {};
-	typedef vector<unique_ptr<NExpression>> ExpressionList;
-	typedef vector<unique_ptr<NStatement>> StatementList;
 
-	struct NType;
-	struct NIdentifier : public NExpression {
-		vector<string> levels;
+		static bool classof(const Base *B) {
+			return B->getKind() >= ObjectKind::Expression
+					&& B->getKind() <= ObjectKind::BinaryOperation;
+		}
+	};
+	struct Statement : public Node {
+		Statement(ObjectKind K) : Node(K) {}
+
+		static bool classof(const Base *B) {
+			return B->getKind() >= ObjectKind::Statement
+					&& B->getKind() <= ObjectKind::IfElse;
+		}
+	};
+	typedef vector<ObjectUniquePtr<Expression>> ExpressionList;
+	typedef vector<ObjectUniquePtr<Statement>> StatementList;
+
+	struct Type;
+	struct Identifier : public Expression {
+		struct Level {
+			string name;
+			ObjectUniquePtr<Expression> expr;
+
+			Level() = delete;
+			Level(string&& name) : name(move(name)) {}
+			Level(string&& name, ObjectUniquePtrHandle&& expr) : name(move(name)),
+					expr(move(expr)) {}
+			Level(Level&& o) noexcept = default;
+		};
+		typedef vector<Level> Levels;
+		Levels levels;
 		
-		NIdentifier() {}
-		NIdentifier(string&& firstLevel) { levels.emplace_back(move(firstLevel)); }
-		NIdentifier(NIdentifier &&o) noexcept : levels(move(o.levels)) {}
-		NIdentifier& operator=(NIdentifier &&o) { levels = move(o.levels); return *this; }
+		Identifier() : Expression(ObjectKind::Identifier) {}
+		Identifier(Identifier&& o) noexcept = default;
+		static bool classof(const Base *B) {
+			return B->getKind() == ObjectKind::Identifier;
+		}
+
+// 		Identifier& operator=(Identifier&& o) { levels = move(o.levels); return *this; }
 		
-		virtual Value* Codegen(CodegenContext& context) const;
-		__TalesTypeIndex RuntimeType(CodegenEnv& env, const NType** ty) const;
-		virtual __TalesTypeIndex RuntimeType(CodegenEnv& env) const { return RuntimeType(env, nullptr); }
+		virtual llvm::Value* Codegen(CodegenContext& context) const;
+		__TalesTypeIndex RuntimeType(CodegenEnv& env, const Type** ty) const;
+		virtual __TalesTypeIndex RuntimeType(CodegenEnv& env) const {
+			return RuntimeType(env, nullptr);
+		}
 		
 		inline string FullPath() const {
 			string fullPath = "";
-			for (vector<string>::const_iterator level = levels.cbegin(), last = levels.cend() ; level != last ; level++) {
-				fullPath += *level;
+			for (auto& level : levels) {
+				fullPath += level.name;
+// 				if (level.expr) {
+// 					fullPath += "[";
+// 					fullPath +=
+// 					fullPath += "]";
+// 				}
 			}
 			return fullPath;
 		}
 	};
 	
-	struct NStructLike;
-	struct NFunctionType;
+	struct StructLike;
+	struct FunctionType;
 	
-	struct NType {
+	struct Type : public Base {
 		typedef __TalesTypeIndex Kind;
 		
-		Kind kind;
-		const NStructLike* structDecl;
-		const NFunctionType* funcType;
+		const Kind kind = TYPEIDX_NIL;
+		const StructLike* structDecl = nullptr;
+		const FunctionType* funcType = nullptr;
 		
-		NType() : kind(TYPEIDX_NIL), structDecl(nullptr) {}
-		NType(const Kind kind) : kind(kind), structDecl(nullptr) {}
-		NType(const Kind kind, const NStructLike* structDecl) : kind(kind), structDecl(structDecl) {}
-		NType(NFunctionType* funcType) : kind(TYPEIDX_FUNCTION), structDecl(nullptr), funcType(funcType) {}
-		NType(NType&& o) noexcept : kind(o.kind), structDecl(o.structDecl), funcType(o.funcType) {}
+		Type() : Base(ObjectKind::Type) {}
+		Type(Kind kind) : Base(ObjectKind::Type), kind(kind) {}
+
+		// Deduces the structDecl and funcType from the initial assignments of locals,
+		// table spairs, class fields
+		Type(Kind kind, const Expression* expr);
+
+		Type(Type&& o) noexcept = default;
+
+		static bool classof(const Base *B) {
+			return B->getKind() == ObjectKind::Type;
+		}
 		
 		operator __TalesTypeIndex() const { return kind; }
 		
-		NType& operator =(NType&& o) { kind = o.kind; structDecl = o.structDecl; funcType = o.funcType; return *this; }
-// 		NType& operator =(NType& o) { kind = o.kind; structDecl = o.structDecl; funcType = o.funcType; return *this; }
+		Type(ASTContext& ast, const string& className);
+// 		void SetClass(ASTContext& ast, const string& className);
 		
-		NType(ASTContext& ast, const string& className);
-		void SetClass(ASTContext& ast, const string& className);
-		
-		// Deduces the structDecl and funcType from the initial assignments of locals, table spairs, class fields
-		inline void RefineFromExpr(const NExpression* expr);
-		
-		Type* Typegen(CodegenContext& context) const;
+		llvm::Type* Typegen(CodegenContext& context) const;
 	};
 
-	struct NNumber : public NExpression {
-		const Number value;
+	struct Number : public Expression {
+		__TalesNumber value = 0.0f;
 		
-		NNumber(Number value) : value(value) {}
-		virtual Value* Codegen(CodegenContext& context) const;
-		virtual __TalesTypeIndex RuntimeType(CodegenEnv& env) const { return TYPEIDX_NUMBER; }
+		Number(__TalesNumber value) : Expression(ObjectKind::Number), value(value) {}
+		static bool classof(const Base *B) {
+			return B->getKind() == ObjectKind::Number;
+		}
+
+		virtual llvm::Value* Codegen(CodegenContext& context) const;
+		virtual __TalesTypeIndex RuntimeType(CodegenEnv& env) const {
+			return TYPEIDX_NUMBER;
+		}
 	};
 
-	struct NString : public NExpression {
-		const string text;
+	struct String : public Expression {
+		string text;
 		
-		NString(string&& text) : text(move(text)) {}
-		virtual Value* Codegen(CodegenContext& context) const;
+		String(string&& text) : Expression(ObjectKind::String), text(text) {}
+		static bool classof(const Base *B) { return B->getKind() == ObjectKind::String; }
+
+		virtual llvm::Value* Codegen(CodegenContext& context) const;
 		virtual __TalesTypeIndex RuntimeType(CodegenEnv& env) const { return TYPEIDX_STRING; }
 	};
 	
-	// Class fields, table spairs, block locals or function arguments, aka all mutable values that are known at compilation time
-	struct NMutable {
-		NType type;
+	// Class fields, table spairs, block locals or function arguments, aka all mutable values
+	// that are known at compilation time.
+	struct Mutable : public Base {
 		string name;
-		unique_ptr<NExpression> initialAssignment;
+		ObjectUniquePtr<Expression> initialAssignment;
+		Type type;
 		
-		NMutable() {}
-		NMutable(NType&& type, string&& name) : type(move(type)), name(move(name)), initialAssignment(nullptr) {}
-		NMutable(NType&& type, string&& name, unique_ptr<NExpression>&& initialAssignment) : type(move(type)), name(move(name)), initialAssignment(move(initialAssignment)) {}
-		NMutable(NMutable&& o) noexcept : type(move(o.type)), name(move(o.name)), initialAssignment(move(o.initialAssignment)) {}
+		Mutable(string&& name) : Base(ObjectKind::Mutable), name(move(name)) {}
+		Mutable(Type&& type, string&& name) : Base(ObjectKind::Mutable),
+				type(move(type)), name(move(name)) {}
+		Mutable(string&& name, ObjectUniquePtrHandle&& initialAssignment)
+				: Base(ObjectKind::Mutable), name(move(name)),
+				  initialAssignment(move(initialAssignment)) {}
+		Mutable(Type&& type, string&& name, ObjectUniquePtrHandle&& initialAssignment)
+				: Base(ObjectKind::Mutable), name(move(name)),
+				  initialAssignment(move(initialAssignment)), type(type.kind, Mutable::initialAssignment.get()) {}
+		Mutable(Mutable&& o) noexcept = default;
+
+		static bool classof(const Base *B) { return B->getKind() == ObjectKind::Mutable;	}
 	};
 	
-	struct LexicalMutables : public vector<NMutable> {}; // "lexical/semantic level"
-	
-	typedef LexicalMutables::size_type FieldIndex;
-	struct FieldList : public LexicalMutables {
+	struct LexicalContext : public vector<Mutable> { // a "lexical/semantic level"
+// 		LexicalContext* parent;
+//
+// 		LexicalContext(LexicalContext* parent) : parent(parent) {}
+		LexicalContext() = default;
+		LexicalContext(LexicalContext&) = delete;
+		LexicalContext(LexicalContext&&) = default;
+		LexicalContext& operator=(LexicalContext&) = delete;
+		LexicalContext& operator=(LexicalContext&&) = default;
+	};
+
+	struct FieldList : public LexicalContext, public Base {
+		typedef LexicalContext::size_type Index;
+
+		FieldList() : Base(ObjectKind::FieldList) {}
+		FieldList(FieldList&& o) = default;
+
 		// Generates the LLVM struct type following the header in tables and class instances
-		StructType* Typegen(CodegenContext& context) const;
+		llvm::StructType* Typegen(CodegenContext& context) const;
 		
 // 		// Generates the LLVM IR instructions to initialize the fields, it has to be provided the pointer to the struct in memory (follows a table or class header)
-// 		Value* Codegen(CodegenContext& context) const;
+// 		llvm::Value* Codegen(CodegenContext& context) const;
 		
 		// Returns the right index for the GEP instruction
-		bool FindFieldIndex(const string& fieldName, FieldIndex& fieldIndex) const {
+		bool FindFieldIndex(const string& fieldName, Index& fieldIndex) const {
 			for (fieldIndex = 0; fieldIndex < size(); ++fieldIndex)
 				if (at(fieldIndex).name == fieldName)
 					return true;
 			return false;
 		}
 		
-		FieldList& operator =(FieldList&&) = default;
-		FieldList& operator =(FieldList&) = delete; // a safeguard
+		FieldList& operator=(FieldList&&) = default;
+		FieldList& operator=(FieldList&) = delete; // a safeguard
 	};
 	
-	struct NStructLike : public NExpression {
-		FieldList fields; // a.k.a spairs in Tales' tables there are the fixed struct-like pairs, and the LUA-like pairs
+	struct StructLike : public Expression {
+		FieldList fields; // a.k.a spairs in Tales' tables there are the fixed struct-like pairs,
+				// and the LUA-like pairs
+
+		StructLike(ObjectKind K) : Expression(K) {}
+		StructLike(ObjectKind K, FieldList&& fields) : Expression(K), fields(move(fields)) {}
+
+		static bool classof(const Base *B) {
+			return B->getKind() >= ObjectKind::Table
+					&& B->getKind() <= ObjectKind::ClassDeclaration;
+		}
 	};
 	
-	struct NTable : public NStructLike {
+	struct Table : public StructLike {
 		ExpressionList ipairs;
+
+		Table() : StructLike(ObjectKind::Table) {}
+		static bool classof(const Base *B) {
+			return B->getKind() == ObjectKind::Table;
+		}
 		
-		virtual Value* Codegen(CodegenContext& context) const;
-		Type* Typegen(Tales::CodegenContext& context) const;
-		virtual __TalesTypeIndex RuntimeType(CodegenEnv& env) const { return TYPEIDX_TABLE; }
+		virtual llvm::Value* Codegen(CodegenContext& context) const;
+		llvm::Type* Typegen(Tales::CodegenContext& context) const;
+		virtual __TalesTypeIndex RuntimeType(CodegenEnv& env) const {
+			return TYPEIDX_TABLE;
+		}
 	};
 	
-	struct NClassDeclaration : public NStructLike {
-		NClassDeclaration(FieldList&& _fields) { fields = move(_fields); }
-		virtual Value* Codegen(CodegenContext& context) const { return nullptr; }
-		StructType* Typegen(CodegenContext& context) const { return nullptr; }
-		virtual __TalesTypeIndex RuntimeType(CodegenEnv& env) const { return TYPEIDX_CLASSINST; }
+	struct ClassDeclaration : public StructLike {
+		ClassDeclaration(FieldList&& fields)
+				: StructLike(ObjectKind::ClassDeclaration, move(fields)) {}
+		static bool classof(const Base *B) {
+			return B->getKind() == ObjectKind::ClassDeclaration;
+		}
+
+		virtual llvm::Value* Codegen(CodegenContext& context) const { return nullptr; }
+		llvm::StructType* Typegen(CodegenContext& context) const { return nullptr; }
+		virtual __TalesTypeIndex RuntimeType(CodegenEnv& env) const {
+			return TYPEIDX_CLASSINST;
+		}
 	};
 
-	struct NBinaryOperation : public NExpression {
-		enum Operator {
-			NOT, AND, OR,
-			EQ, NE, LT, LE, GT, GE,
-			PLUS, MINUS, MULT, DIV, MOD
-		};
+	enum class Operator {
+		NOT, AND, OR,
+		EQ, NE, LT, LE, GT, GE,
+		PLUS, MINUS, MULT, DIV, MOD
+	};
+
+	struct BinaryOperation : public Expression {
 		const Operator op;
-		const unique_ptr<NExpression> lhs;
-		const unique_ptr<NExpression> rhs;
+		ObjectUniquePtr<Expression> lhs;
+		ObjectUniquePtr<Expression> rhs;
 		
-		NBinaryOperation(unique_ptr<NExpression>&& lhs, const Operator op, unique_ptr<NExpression>&& rhs) : lhs(move(lhs)), rhs(move(rhs)), op(op) {}
-		virtual Value* Codegen(CodegenContext& context) const;
+		BinaryOperation(ObjectUniquePtrHandle&& lhs, const Operator op,
+										ObjectUniquePtrHandle&& rhs)
+			: Expression(ObjectKind::BinaryOperation), lhs(move(lhs)), rhs(move(rhs)), op(op) {}
+		static bool classof(const Base *B) {
+			return B->getKind() == ObjectKind::BinaryOperation;
+		}
+
+		virtual llvm::Value* Codegen(CodegenContext& context) const;
 		virtual __TalesTypeIndex RuntimeType(CodegenEnv& env) const {
 			switch(op) {
 				default:
@@ -193,105 +294,171 @@ namespace Tales {
 		}
 	};
 
-	struct NBlock : public NStatement {
-		typedef LexicalMutables LocalList;
+	struct Block : public Statement {
+		typedef LexicalContext LocalList;
 		
 		LocalList locals;
 		StatementList statements;
 		
-		NBlock() {}
-		NBlock(NBlock&& o) : locals(move(o.locals)), statements(move(o.statements)) {}
-		NBlock& operator=(NBlock &&o) { locals = move(o.locals); statements = move(o.statements); return *this; }
-		virtual Value* Codegen(CodegenContext& context) const;
+		Block() : Statement(ObjectKind::Block) {}
+		Block(Block&& o) = default;
+		static bool classof(const Base *B) {
+			return B->getKind() == ObjectKind::Block;
+		}
+
+		virtual llvm::Value* Codegen(CodegenContext& context) const;
 	};
 
-	struct NAssignment : public NStatement {
-		const NIdentifier lhs;
-		const unique_ptr<NExpression> rhs;
+	struct Assignment : public Statement {
+		Identifier lhs;
+		ObjectUniquePtr<Expression> rhs;
 		
-		NAssignment(NIdentifier&& lhs, unique_ptr<NExpression>&& rhs) : lhs(move(lhs)), rhs(move(rhs)) {}
-		virtual Value* Codegen(CodegenContext& context) const;
+		Assignment(Identifier&& lhs, ObjectUniquePtrHandle&& rhs)
+			: Statement(ObjectKind::Assignment), lhs(move(lhs)), rhs(move(rhs)) {}
+		static bool classof(const Base *B) {
+			return B->getKind() == ObjectKind::Assignment;
+		}
+
+		virtual llvm::Value* Codegen(CodegenContext& context) const;
 	};
 	
-	struct NReturn : public NStatement {
-		const unique_ptr<NExpression> returnExpr;
+	struct Return : public Statement {
+		ObjectUniquePtr<Expression> returnExpr;
 		
-		NReturn(unique_ptr<NExpression>&& returnExpr) : returnExpr(move(returnExpr)) {}
-		virtual Value* Codegen(CodegenContext& context) const;
+		Return(ObjectUniquePtrHandle&& returnExpr) : Statement(ObjectKind::Return),
+							returnExpr(move(returnExpr)) {}
+		static bool classof(const Base *B) {
+			return B->getKind() == ObjectKind::Return;
+		}
+
+		virtual llvm::Value* Codegen(CodegenContext& context) const;
 	};
 	
-	struct NIfElse : public NStatement {
-		const unique_ptr<NExpression> cond;
-		const unique_ptr<NStatement> then;
-		const unique_ptr<NStatement> _else;
+	struct IfElse : public Statement {
+		ObjectUniquePtr<Expression> cond;
+		ObjectUniquePtr<Statement> then;
+		ObjectUniquePtr<Statement> _else;
 		
-		NIfElse(unique_ptr<NExpression>&& cond, unique_ptr<NStatement>&& then, unique_ptr<NStatement>&& _else) : cond(move(cond)), then(move(then)), _else(move(_else)) {}
-		virtual Value *Codegen(CodegenContext& context) const;
-	};
-	
-	struct NFunctionType {
-		typedef LexicalMutables ArgumentList;
-	
-		const NType rtype;
-		const ArgumentList args;
-		
-		NFunctionType() : args() {}
-		NFunctionType(ArgumentList&& args) : args(move(args)) {}
-		NFunctionType(NType&& rtype, ArgumentList&& args) : rtype(move(rtype)), args(move(args)) {}
-		FunctionType* Typegen(CodegenContext& context) const;  // returns the function pointer type
+		IfElse(ObjectUniquePtr<Expression>&& cond, ObjectUniquePtr<Statement>&& then,
+											ObjectUniquePtr<Statement>&& _else)
+				: Statement(ObjectKind::IfElse), cond(move(cond)),
+				  then(move(then)), _else(move(_else)) {}
+		static bool classof(const Base *B) {
+			return B->getKind() == ObjectKind::IfElse;
+		}
+
+		virtual llvm::Value *Codegen(CodegenContext& context) const;
 	};
 
-	struct NFunctionDeclaration : public NExpression {
+	struct ArgumentList : public LexicalContext, public Base {
+		ArgumentList() : Base(ObjectKind::ArgumentList) {}
+
+		static bool classof(const Base *B) {
+			return B->getKind() == ObjectKind::ArgumentList;
+		}
+	};
+
+	struct FunctionType {
+		Type rtype;
+		ArgumentList args;
+		
+		FunctionType() : args() {}
+		FunctionType(ArgumentList&& args) : args(move(args)) {}
+		FunctionType(Type&& rtype, ArgumentList&& args) : rtype(move(rtype)),
+				args(move(args)) {}
+
+		llvm::FunctionType* Typegen(CodegenContext& context) const;
+	};
+
+	struct FunctionDeclaration : public Expression {
 		string debugName;
 		
-		const NFunctionType ftype;
-		const NBlock block;
+		FunctionType ftype;
+		Block block;
 		
-		NFunctionDeclaration(NBlock&& block) : block(move(block)) {}
-		NFunctionDeclaration(NFunctionType::ArgumentList&& args, NBlock&& block) : ftype(move(args)), block(move(block)) {}
-		NFunctionDeclaration(NType&& type, NFunctionType::ArgumentList&& args, NBlock&& block) : ftype(move(type), move(args)), block(move(block)) {}
-		Function* CodegenFunc(CodegenContext& context) const; // this is the function that must be called for the main block
-		virtual Value* Codegen(CodegenContext& context) const;
+		FunctionDeclaration(Block&& block, const string debugName = "")
+				: Expression(ObjectKind::FunctionDeclaration), block(move(block)),
+								debugName(debugName) {}
+		FunctionDeclaration(ArgumentList&& args, Block&& block,
+												const string debugName = "")
+				: Expression(ObjectKind::FunctionDeclaration), ftype(move(args)),
+								block(move(block)), debugName(debugName) {}
+		FunctionDeclaration(Type&& type, ArgumentList&& args,
+												Block&& block, const string debugName = "")
+				: Expression(ObjectKind::FunctionDeclaration), ftype(move(type), move(args)),
+								block(move(block)), debugName(debugName) {}
+		static bool classof(const Base *B) {
+			return B->getKind() == ObjectKind::FunctionDeclaration;
+		}
+
+		// Called by Codegen to generate the "strongly typed" function
+		llvm::Function* CodegenFunc(CodegenContext& context) const;
+		virtual llvm::Value* Codegen(CodegenContext& context) const;
 		virtual __TalesTypeIndex RuntimeType(CodegenEnv& env) const { return TYPEIDX_FUNCTION; }
 	};
 
-	struct NFunctionCall : public NExpression, public NStatement {
-		typedef ExpressionList CallArgumentList;
+	struct CallArgumentList : public ExpressionList, public Base {
+		CallArgumentList() : Base(ObjectKind::CallArgumentList) {}
+
+		static bool classof(const Base *B) {
+			return B->getKind() == ObjectKind::CallArgumentList;
+		}
+	};
+
+	// NOTE: multiple inheritance poses problems with LLVM RTTI, hence
+	// the split of FunctionCall into two very similar classes.
+
+	struct FunctionCall {
+		Identifier funcId;
+		CallArgumentList callArgs;
 		
-		const NIdentifier funcId;
-		const CallArgumentList callArgs;
-		
-		NFunctionCall(NIdentifier&& funcId, CallArgumentList&& callArgs) : funcId(move(funcId)), callArgs(move(callArgs)) {}
-		virtual Value* Codegen(CodegenContext& context) const;
-		virtual __TalesTypeIndex RuntimeType(CodegenEnv& env) const { return funcId.RuntimeType(env); } // function return type if sfield (reachable), determined from the prototype header at runtime otherwise
+		FunctionCall(Identifier&& funcId, CallArgumentList&& callArgs)
+				: funcId(move(funcId)), callArgs(move(callArgs)) {}
+
+		llvm::Value* Codegen(CodegenContext& context) const;
+	};
+
+	struct FunctionCallExpr : public FunctionCall, public Expression {
+		FunctionCallExpr(Identifier&& funcId, CallArgumentList&& callArgs)
+				: Expression(ObjectKind::FunctionCallExpr),
+					FunctionCall(move(funcId), move(callArgs)) {}
+
+		static bool classof(const Base *B) {
+			return B->getKind() == ObjectKind::FunctionCallExpr;
+		}
+
+		virtual llvm::Value* Codegen(CodegenContext& context) const {
+			return FunctionCall::Codegen(context);
+		}
+
+		virtual __TalesTypeIndex RuntimeType(CodegenEnv& env) const {
+			// Function return type if sfield (reachable), determined from
+			// the prototype header at runtime otherwise.
+			return funcId.RuntimeType(env);
+		}
+	};
+
+	struct FunctionCallStmt : public FunctionCall, public Statement {
+		FunctionCallStmt(Identifier&& funcId, CallArgumentList&& callArgs)
+				: Statement(ObjectKind::FunctionCallStmt),
+					FunctionCall(move(funcId), move(callArgs)) {}
+
+		static bool classof(const Base *B) {
+			return B->getKind() == ObjectKind::FunctionCallStmt;
+		}
+
+		virtual llvm::Value* Codegen(CodegenContext& context) const {
+			return FunctionCall::Codegen(context);
+		}
 	};
 	
 	struct ASTContext {
-		map<string, NClassDeclaration*> classMap;
+		map<string, ClassDeclaration*> classMap;
 		
-		unique_ptr<NTable> root;  // will be initialized as an empty table by the parser if nullptr
-		unique_ptr<NFunctionDeclaration> parsedChunk;
+		ObjectUniquePtr<Table> root;  // will be initialized as an empty table by the parser if nullptr
+		ObjectUniquePtr<FunctionDeclaration> parsedChunk;
 		
 		ASTContext() {}
-		ASTContext(NTable* root) : root(root) {}
+		ASTContext(ObjectUniquePtrHandle&& root) : root(move(root)) {}
 	};
-	
-	// FIXME: const or not const is a bit of a mess and should be flattened to const everywhere someday if possible
-	
-	inline void NType::RefineFromExpr(const NExpression* expr) { 
-		if (const NStructLike* _structDecl = dynamic_cast<const NStructLike*>(expr))
-			structDecl = _structDecl;
-		if (const NFunctionDeclaration* func = dynamic_cast<const NFunctionDeclaration*>(expr))
-			funcType = &func->ftype;
-	}
-
-#ifdef TalesCodegen
-	NType::NType(ASTContext& ast, const string& className) : kind(TYPEIDX_CLASSINST) {
-		structDecl = ast.classMap[className];
-	}
-	void NType::SetClass(ASTContext& ast, const string& className) {
-		kind = TYPEIDX_CLASSINST;
-		structDecl = ast.classMap[className];
-	}
-#endif
 }

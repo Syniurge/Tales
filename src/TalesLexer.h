@@ -21,6 +21,8 @@
 #ifndef Scanner_H_INCLUDED_
 #define Scanner_H_INCLUDED_
 
+#include "llvm/Support/raw_ostream.h"
+
 // $insert baseclass_h
 #include "TalesLexerbase.h"
 
@@ -34,16 +36,19 @@ namespace Tales
 class Scanner: public ScannerBase
 {
     public:
-        explicit Scanner(std::istream &in = std::cin,
+        explicit Scanner(ParserBase::STYPE__ &d_val,
+																std::istream &in = std::cin,
                                 std::ostream &out = std::cout);
 
-        Scanner(std::string const &infile, std::string const &outfile);
+        Scanner(ParserBase::STYPE__ &d_val,
+									std::string const &infile,
+									std::string const &outfile);
         
         // $insert lexFunctionDecl
         int lex();
 
     private:
-        ParserBase::STYPE__ *d_val__;
+        ParserBase::STYPE__ &d_val__;
 
         int lex__();
         int executeAction__(size_t ruleNr);
@@ -51,20 +56,19 @@ class Scanner: public ScannerBase
         void print();
         void preCode();     // re-implement this function for code that must 
                             // be exec'ed before the patternmatching starts
-
-    public:
-        void setSval(ParserBase::STYPE__ *d_val) { d_val__ = d_val; }
 };
 
 // $insert scannerConstructors
-inline Scanner::Scanner(std::istream &in, std::ostream &out)
+inline Scanner::Scanner(ParserBase::STYPE__ &d_val, std::istream &in, std::ostream &out)
 :
-    ScannerBase(in, out)
+    ScannerBase(in, out),
+    d_val__(d_val)
 {}
 
-inline Scanner::Scanner(std::string const &infile, std::string const &outfile)
+inline Scanner::Scanner(ParserBase::STYPE__ &d_val, std::string const &infile, std::string const &outfile)
 :
-    ScannerBase(infile, outfile)
+    ScannerBase(infile, outfile),
+    d_val__(d_val)
 {}
 
 // $insert inlineLexFunction

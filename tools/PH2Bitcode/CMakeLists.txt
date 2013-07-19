@@ -1,6 +1,13 @@
 # The new bash script-free build system should work on any system supported by CMake (diff.exe and patch.exe are required on Windows though), but watch out for the NOTE at the end of the file.
 # I won't be testing Tales on systems with CMAKE_BUILD_TOOL different from Make and Ninja for a long time, so some help would be needed to figure out the arguments to be passed to other build tools if there are any.
 
+include(FindPackageHandleStandardArgs)
+
+find_program(DIFF_EXECUTABLE diff)
+FIND_PACKAGE_HANDLE_STANDARD_ARGS(DIFF REQUIRED_VARS DIFF_EXECUTABLE)
+find_program(PATCH_EXECUTABLE patch)
+FIND_PACKAGE_HANDLE_STANDARD_ARGS(PATCH REQUIRED_VARS PATCH_EXECUTABLE)
+
 list(APPEND PH2BC_MODFILES
 	tools/clang/include/clang/AST/ASTConsumer.h
 	tools/clang/include/clang/Driver/CC1Options.td
@@ -75,7 +82,7 @@ foreach(MODFILE_LLVM IN LISTS PH2BC_MODFILES)
 	)
 
 	add_custom_command(OUTPUT "${PATH_TO_LLVM_SOURCE}/${MODFILE_LLVM}"
-		COMMAND patch --no-backup-if-mismatch
+		COMMAND ${PATCH_EXECUTABLE} --no-backup-if-mismatch
 			-o "${PATH_TO_LLVM_SOURCE}/${MODFILE_LLVM}"
 			"${PATH_TO_LLVM_SOURCE}/${MODFILE_LLVM}.orig"
 			"${CMAKE_CURRENT_BINARY_DIR}/patches/${MODFILE_BASENAME}.patch"

@@ -21,6 +21,8 @@
 #ifndef TalesParser_h_included
 #define TalesParser_h_included
 
+#include "TalesRTTI.hpp"
+
 // $insert baseclass
 #include "TalesParserbase.h"
 // $insert scanner.h
@@ -39,7 +41,9 @@ class Parser: public ParserBase
         
     public:
         int parse();
-        Parser(ASTContext& context, std::istream &in = std::cin, std::ostream &out = std::cout) : context(context), d_scanner(in, out) { d_scanner.setSval(&d_val__); }
+        Parser(ASTContext& context, std::istream &in = std::cin,
+								std::ostream &out = std::cout)
+						: context(context), d_scanner(d_val__, in, out) {}
 
     private:
         void error(char const *msg);    // called on (syntax) errors

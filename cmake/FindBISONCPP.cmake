@@ -54,115 +54,33 @@ FIND_PROGRAM(BISONCPP_EXECUTABLE bisonc++ DOC "path to the bisonc++ executable")
 MARK_AS_ADVANCED(BISONCPP_EXECUTABLE)
 
 IF(BISONCPP_EXECUTABLE)
-  # the bisonc++ commands should be executed with the C locale, otherwise
-  # the message (which are parsed) may be translated
-  SET(_Bison_SAVED_LC_ALL "$ENV{LC_ALL}")
-  SET(ENV{LC_ALL} C)
+	# the bisonc++ commands should be executed with the C locale, otherwise
+	# the message (which are parsed) may be translated
+	SET(_Bison_SAVED_LC_ALL "$ENV{LC_ALL}")
+	SET(ENV{LC_ALL} C)
 
-  EXECUTE_PROCESS(COMMAND ${BISONCPP_EXECUTABLE} --version
-    OUTPUT_VARIABLE BISONCPP_version_output
-    ERROR_VARIABLE BISONCPP_version_error
-    RESULT_VARIABLE BISONCPP_version_result
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
+	EXECUTE_PROCESS(COMMAND ${BISONCPP_EXECUTABLE} --version
+		OUTPUT_VARIABLE BISONCPP_version_output
+		ERROR_VARIABLE BISONCPP_version_error
+		RESULT_VARIABLE BISONCPP_version_result
+		OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-  SET(ENV{LC_ALL} ${_Bison_SAVED_LC_ALL})
+	SET(ENV{LC_ALL} ${_Bison_SAVED_LC_ALL})
 
-  IF(NOT ${BISONCPP_version_result} EQUAL 0) # NOTE: bisonc++ used to return 1 instead of 0 before 4.03.00
-    MESSAGE(SEND_ERROR "Command \"${BISONCPP_EXECUTABLE} --version\" failed with output:\n${BISONCPP_version_error}")
-  ELSE()
-    # Bisonc++
-    IF("${BISONCPP_version_output}" MATCHES "^bisonc\\+\\+[^+]")
-      STRING(REGEX REPLACE "^bisonc\\+\\+ V([^\n]+)$" "\\1"
-        BISONCPP_VERSION "${BISONCPP_version_output}")
-    ENDIF()
-  ENDIF()
+	IF(NOT ${BISONCPP_version_result} EQUAL 0) # NOTE: bisonc++ used to return 1 instead of 0 before 4.03.00
+		MESSAGE(SEND_ERROR "Command \"${BISONCPP_EXECUTABLE} --version\" failed with output:\n${BISONCPP_version_error}")
+	ELSE()
+		IF("${BISONCPP_version_output}" MATCHES "^bisonc\\+\\+[^+]")
+			STRING(REGEX REPLACE "^bisonc\\+\\+ V([^\n]+)$" "\\1"
+				BISONCPP_VERSION "${BISONCPP_version_output}")
+		ENDIF()
+	ENDIF()
 
-  # internal macro
-  MACRO(BISONCPP_TARGET_option_verbose Name BisonOutput filename)
-    LIST(APPEND BISONCPP_TARGET_cmdopt "--verbose")
-    ADD_CUSTOM_COMMAND(OUTPUT ${filename}
-      COMMAND ${CMAKE_COMMAND}
-      ARGS -E copy
-      "${BISONCPP_TARGET_output_path}/${BISONCPP_TARGET_output_name}.output"
-      "${filename}"
-      DEPENDS
-      "${BISONCPP_TARGET_output_path}/${BISONCPP_TARGET_output_name}.output"
-      COMMENT "[BISONCPP][${Name}] Copying bisonc++ verbose table to ${filename}"
-      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-    SET(BISONCPP_${Name}_VERBOSE_FILE ${filename})
-    LIST(APPEND BISONCPP_TARGET_extraoutputs
-      "${BISONCPP_TARGET_output_path}/${BISONCPP_TARGET_output_name}.output")
-  ENDMACRO(BISONCPP_TARGET_option_verbose)
-
-  #============================================================
-  # BISONCPP_TARGET (public macro)
-  #============================================================
-  #
-  MACRO(BISONCPP_TARGET Name BisonInput BisonOutput)
-    SET(BISONCPP_TARGET_usage "BISONCPP_TARGET(<Name> <Input> <Output> [ERROR_VERBOSE] [DEBUG] [VERBOSE <file>] [IMPLEMENTATION_HEADERS <extensionless file>] [COMPILE_FLAGS <string> ...]")
-
-    SET(BISONCPP_TARGET_cmdopt "")
-    SET(BISONCPP_TARGET_outputs "${BisonOutput}")
-
-    GET_FILENAME_COMPONENT(BISONCPP_TARGET_output_path "${BisonOutput}" PATH)
-    GET_FILENAME_COMPONENT(BISONCPP_TARGET_output_name "${BisonOutput}" NAME_WE)
-
-    STRING(REGEX REPLACE "\\.[a-zA-Z0-9_]+$" "base.h" BISONCPP_TARGET_baseclassh "${BisonOutput}")
-    LIST(APPEND BISONCPP_TARGET_extraoutputs "${BISONCPP_TARGET_baseclassh}")
-    LIST(APPEND BISONCPP_TARGET_cmdopt -b "${BISONCPP_TARGET_baseclassh}")
-
-    SET(BISONCPP_parse_options DEBUG ERROR_VERBOSE)
-    SET(BISONCPP_parse_onevalue VERBOSE IMPLEMENTATION_HEADERS)
-    SET(BISONCPP_parse_multivalues COMPILE_FLAGS)
-    CMAKE_PARSE_ARGUMENTS(BISONCPP "${BISONCPP_parse_options}" "${BISONCPP_parse_onevalue}" "${BISONCPP_parse_multivalues}" ${ARGN})
-
-    IF("${BISONCPP_UNPARSED_ARGUMENTS}")
-      MESSAGE(SEND_ERROR "Usage")
-    ELSE()
-      IF("${BISONCPP_DEBUG}")
-        LIST(APPEND BISONCPP_TARGET_cmdopt --debug)
-      ENDIF()
-
-      IF("${BISONCPP_ERROR_VERBOSE}")
-        LIST(APPEND BISONCPP_TARGET_cmdopt --error-verbose)
-      ENDIF()
-
-      IF("${BISONCPP_VERBOSE}")
-        BISONCPP_TARGET_option_verbose(${Name} ${BisonOutput} "${BISONCPP_VERBOSE}")
-      ENDIF()
-
-      IF("${BISONCPP_IMPLEMENTATION_HEADERS}")
-        BISONCPP_TARGET_option_extraopts("-c \"${BISONCPP_IMPLEMENTATION_HEADERS}.h\" -i \"${BISONCPP_IMPLEMENTATION_HEADERS}.ih\"")
-      ENDIF()
-
-      IF("${BISONCPP_COMPILE_FLAGS}")
-        LIST(APPEND BISONCPP_TARGET_cmdopt ${BISONCPP_COMPILE_FLAGS})
-      ENDIF()
-
-      ADD_CUSTOM_COMMAND(OUTPUT ${BISONCPP_TARGET_outputs}
-        ${BISONCPP_TARGET_extraoutputs}
-        COMMAND ${BISONCPP_EXECUTABLE}
-        ARGS ${BISONCPP_TARGET_cmdopt} -p ${ARGV2} ${ARGV1}
-        DEPENDS ${ARGV1}
-        COMMENT "[BISONCPP][${Name}] Building parser with bisonc++ ${BISONCPP_VERSION}"
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-
-      # define target variables
-      SET(BISONCPP_${Name}_DEFINED TRUE)
-      SET(BISONCPP_${Name}_INPUT ${ARGV1})
-      SET(BISONCPP_${Name}_OUTPUTS ${BISONCPP_TARGET_outputs})
-      SET(BISONCPP_${Name}_COMPILE_FLAGS ${BISONCPP_TARGET_cmdopt})
-      SET(BISONCPP_${Name}_OUTPUT_SOURCE "${BisonOutput}")
-    ENDIF()
-
-  ENDMACRO(BISONCPP_TARGET)
-  #
-  #============================================================
-
+	INCLUDE(BISONCPP)
 ENDIF(BISONCPP_EXECUTABLE)
 
 INCLUDE(FindPackageHandleStandardArgs)
-FIND_PACKAGE_HANDLE_STANDARD_ARGS(BISONCPP REQUIRED_VARS  BISONCPP_EXECUTABLE
+FIND_PACKAGE_HANDLE_STANDARD_ARGS(BISONCPP REQUIRED_VARS BISONCPP_EXECUTABLE
                                         VERSION_VAR BISONCPP_VERSION)
 
 # FindBISONCPP.cmake ends here

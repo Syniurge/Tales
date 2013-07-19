@@ -1,0 +1,93 @@
+using std::move;
+
+struct ParserString : public Base, public std::string
+{
+	explicit ParserString() : Base(ObjectKind::ParserString), std::string() {}
+	ParserString(const std::string &str) : Base(ObjectKind::ParserString), std::string(str) {}
+	ParserString(const char* s, size_t n) : Base(ObjectKind::ParserString), std::string(s, n) {}
+	static bool classof(const Base *B) { return B->getKind() == ObjectKind::ParserString; }
+};
+
+struct ParserOperator : public Base
+{
+	const Operator op;
+	ParserOperator(const Operator op) : Base(ObjectKind::ParserOperator), op(op) {}
+	static bool classof(const Base *B) { return B->getKind() == ObjectKind::ParserOperator; }
+
+	operator Operator() const { return op; }
+};
+
+namespace Meta__
+{
+    template <Tag__ tag>
+    struct TypeOfBase;
+
+    template <typename Tp_>
+    struct TagOf;
+
+$insert polymorphicSpecializations
+
+	class SType;
+
+    template <typename Tp_>
+	class CastHandle;
+
+    template <Tag__ tg_>
+    struct TypeOf: public TypeOfBase<tg_>
+    {
+        typedef CastHandle<typename TypeOfBase<tg_>::DataType> DataType;
+    };
+
+	template <typename Tp_>
+	class CastHandle : public ObjectUniquePtrHandle
+	{
+		SType* s_p;
+	public:
+		CastHandle(SType* s_p) : s_p(s_p) {}
+
+		Base* release();
+
+		Tp_& operator*() const;
+		Tp_* operator->() const;
+
+		CastHandle& operator=(CastHandle& o) = delete;
+		CastHandle& operator=(ObjectUniquePtrHandle&& o);
+		template <typename D>
+		CastHandle& operator=(D* p);
+	};
+
+    class SType: public std::shared_ptr<ObjectUniquePtr<Base>>
+    {
+        public:
+            SType() = default;
+            SType(SType const &) = default;
+            SType(SType &&) = default;
+
+            SType &operator=(SType const &) = default;
+            SType &operator=(SType &&) = default;
+
+			template <typename Tp_>
+			SType& operator=(Tp_ *p)
+			{
+				static_assert(std::is_base_of<Base, Tp_>::value,
+								"Attempt to assign an object with an incompatible type");
+				reset(new ObjectUniquePtr<Base>(p));
+				return *this;
+			}
+
+			template <typename Tp_>
+			typename std::enable_if<std::is_base_of<Base, Tp_>::value, CastHandle<Tp_>>::type gethandle()
+			{
+				return CastHandle<Tp_>(this);
+			}
+
+            Tag__ tag();
+    
+            template <Tag__ tg_>
+            typename TypeOf<tg_>::DataType get();
+
+            template <Tag__ tg_>
+            typename TypeOf<tg_>::DataType data();
+    };
+
+}  // namespace Meta__

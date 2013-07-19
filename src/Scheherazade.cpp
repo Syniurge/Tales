@@ -50,21 +50,21 @@ int main(int argc, const char **argv)
 
 	InitializeNativeTarget();
 
-	TalesModule* talesModule = TalesModule::Load();
-	if (!talesModule) {
+	RuntimeModule* runtimeModule = RuntimeModule::Load();
+	if (!runtimeModule) {
 		cerr << "Module creation and Tales Runtime IR loading failed" << endl;
 		return 1;
 	}
 
 	std::string errorStr;
-	ExecutionEngine* execEngine = EngineBuilder(talesModule->module).setErrorStr(&errorStr).create();
+	ExecutionEngine* execEngine = EngineBuilder(runtimeModule->module).setErrorStr(&errorStr).create();
 
 	if (!execEngine) {
 		cerr << "JIT engine creation failed: " << errorStr << endl;
 		return 1;
 	}
 
-	CodegenContext codegenContext(*talesModule, execEngine);
+	CodegenContext codegenContext(*runtimeModule, execEngine);
 
 	codegenContext.env.root = astContext.root.get();
 
@@ -74,9 +74,9 @@ int main(int argc, const char **argv)
 		return 1;
 	}
 
-//  talesModule->module->dump();
+//  runtimeModule->module->dump();
 
-	talesModule->pm.run(*talesModule->module);
+	runtimeModule->pm.run(*runtimeModule->module);
 
 	void *FPtr = execEngine->getPointerToFunction(ChunkF);
 	void (*FP)() = (void (*)())(intptr_t)FPtr;

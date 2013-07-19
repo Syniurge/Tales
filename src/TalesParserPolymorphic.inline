@@ -1,0 +1,60 @@
+namespace Meta__
+{
+
+template <typename Tp_>
+Base* CastHandle<Tp_>::release()
+{
+	return s_p->std::shared_ptr<ObjectUniquePtr<Base>>::get()->release();
+}
+
+template <typename Tp_>
+Tp_& CastHandle<Tp_>::operator*() const
+{
+	return *llvm::cast<Tp_>(s_p->std::shared_ptr<ObjectUniquePtr<Base>>::get()->get());
+}
+
+template <typename Tp_>
+Tp_* CastHandle<Tp_>::operator->() const
+{
+	return llvm::cast<Tp_>(s_p->std::shared_ptr<ObjectUniquePtr<Base>>::get()->get());
+}
+
+template <typename Tp_>
+CastHandle<Tp_>& CastHandle<Tp_>::operator=(ObjectUniquePtrHandle&& o)
+{
+	s_p->reset(new ObjectUniquePtr<Base>(llvm::cast<Tp_>(o.release())));
+	return *this;
+}
+
+template <typename Tp_>
+template <typename D>
+CastHandle<Tp_>& CastHandle<Tp_>::operator=(D* p)
+{
+	static_assert(std::is_base_of<Tp_, D>::value,
+								"Attempt to assign an object with an incompatible type");
+	s_p->reset(new ObjectUniquePtr<Base>(llvm::cast<Tp_>(p)));
+	return *this;
+}
+
+inline Tag__ SType::tag()
+{
+	assert(std::shared_ptr<ObjectUniquePtr<Base>>::get()->get());
+    return std::shared_ptr<ObjectUniquePtr<Base>>::get()->get()->getKind();
+}
+
+template <Tag__ tg_>
+inline typename TypeOf<tg_>::DataType SType::get()
+{
+	if (!*this)
+		reset(new ObjectUniquePtr<Base>);
+
+    return gethandle<typename TypeOfBase<tg_>::DataType>();
+}
+
+template <Tag__ tg_>
+inline typename TypeOf<tg_>::DataType SType::data()
+{
+    return gethandle<typename TypeOfBase<tg_>::DataType>();
+}
+
+} // namespace Meta__

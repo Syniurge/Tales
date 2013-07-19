@@ -1,12 +1,35 @@
 find_package(BISONCPP REQUIRED 4.03)
 find_package(FLEXCPP REQUIRED 1.04)
  
-add_definitions(-std=c++11)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -fno-rtti -fno-exceptions")
+
+ # WORKAROUND: the bisonc++ $insert polymorphic directive redefines the Tag__ enum
+ # which we don't want to do since ObjectKind from the Tales RTTI is used, and there's no
+ # way to tell bisonc++ not to do that without altering its code.
+ # So for now we manually include TalesParserPolymorphic.
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/TalesParserBase.h.cmake
+"file(READ TalesParserBase.h PARSER_BASECLASS_READ)
+file(READ TalesParserPolymorphic PARSER_POLYMORPHIC_READ)
+string(REPLACE \"///@includepolymorphic\" \"\${PARSER_POLYMORPHIC_READ}\"
+	PARSER_BASECLASS_TOWRITE \"\${PARSER_BASECLASS_READ}\")
+file(WRITE \"@CMAKE_CURRENT_BINARY_DIR@/TalesParserBase.h.skel\"
+	\"\${PARSER_BASECLASS_TOWRITE}\")
+")
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/TalesParserBase.h.skel"
+	COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/TalesParserBase.h.cmake"
+	WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+	DEPENDS TalesParserBase.h TalesParserPolymorphic)
 
 BISONCPP_TARGET(TalesParser Tales.y "${CMAKE_CURRENT_BINARY_DIR}/TalesParser.cc"
-	ERROR_VERBOSE IMPLEMENTATION_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/TalesParser")
+	ERROR_VERBOSE IMPLEMENTATION_HEADERS "TalesParser"
+	BASECLASS_SKELETON "${CMAKE_CURRENT_BINARY_DIR}/TalesParserBase.h.skel"
+	POLYMORPHIC_SKELETON "TalesParserPolymorphic"
+	POLYMORPHIC_INLINE_SKELETON "TalesParserPolymorphic.inline"
+	PARSEFUN_SKELETON "${CMAKE_CURRENT_SOURCE_DIR}/TalesParser.cc")
 FLEXCPP_TARGET(TalesLexer Tales.l "${CMAKE_CURRENT_BINARY_DIR}/TalesLexer.cc"
-	IMPLEMENTATION_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/TalesLexer")
+	IMPLEMENTATION_HEADERS "TalesLexer"
+	BASECLASS_SKELETON "TalesLexerBase.h"
+	LEX_SKELETON "${CMAKE_CURRENT_SOURCE_DIR}/TalesLexer.cc")
 ADD_FLEXCPP_BISONCPP_DEPENDENCY(TalesLexer TalesParser)
 include_directories( ${CMAKE_CURRENT_BINARY_DIR} )
 
@@ -49,9 +72,12 @@ include_directories( ${CMAKE_CURRENT_SOURCE_DIR} )
 add_library(Tales STATIC
 	${BISONCPP_TalesParser_OUTPUTS}
 	${FLEXCPP_TalesLexer_OUTPUTS}
+	TalesAST.cpp
 	TalesCodegen.cpp
 ) 
 target_link_libraries(Tales)
+set_source_files_properties(${BISONCPP_TalesParser_OUTPUTS} ${FLEXCPP_TalesLexer_OUTPUTS}
+	PROPERTIES COMPILE_FLAGS "-fexceptions")
 set_source_files_properties(TalesCodegen.cpp
 	PROPERTIES OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/TalesRuntime.s")
 

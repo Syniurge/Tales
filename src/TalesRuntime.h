@@ -19,7 +19,7 @@
 #ifndef TalesRuntime_H_INCLUDED_
 #define TalesRuntime_H_INCLUDED_
 
-typedef float Number;
+typedef float __TalesNumber;
 
 // Max 39 for a 32-bits float, LUA uses 12
 #define NUM2STR_DIGITS 7

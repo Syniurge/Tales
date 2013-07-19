@@ -64,15 +64,15 @@ number              return Parser::NUMBERTYPE;
 string              return Parser::STRINGTYPE;
 table               return Parser::TABLETYPE;
 
-{name}              *d_val__ = string(matched()); return Parser::NAME;
-{number}            *d_val__ = string(matched()); return Parser::NUMBERVALUE;
+{name}              d_val__ = new ParserString(matched()); return Parser::NAME;
+{number}            d_val__ = new ParserString(matched()); return Parser::NUMBERVALUE;
 "--[["              begin(StartCondition__::XLONGCOMMENT);
 "[["                more(); begin(StartCondition__::XLONGSTRING);
 "--"[^\n\r]*        ;
-\"                  *d_val__ = string(); begin(StartCondition__::XSTRINGQ);
-'                   *d_val__ = string(); begin(StartCondition__::XSTRINGA);
+\"                  d_val__ = new ParserString; begin(StartCondition__::XSTRINGQ);
+'                   d_val__ = new ParserString; begin(StartCondition__::XSTRINGA);
 {w}                 ;
-{eol}               /*cout << "EOL" << endl*/;
+{eol}               /*cout << "EOL\n"*/;
 
 "..."               return Parser::DOTS;
 ".."                return Parser::CONCAT;
@@ -99,36 +99,36 @@ table               return Parser::TABLETYPE;
 "{" |
 "}"                 return matched()[0];
 
-.                   cerr << "unknown token\"" << matched() << "\" has been ignored." << endl;
+.                   llvm::errs() << "unknown token\"" << matched() << "\" has been ignored.\n";
 
 <XSTRINGQ>{
     \"\"            ;
     \"              begin(StartCondition__::INITIAL); return Parser::STRINGVALUE;
     {eol}           {
-                        cerr << "unterminated \"string\"." << endl;
+                        llvm::errs() << "unterminated \"string\".\n";
                         begin(StartCondition__::INITIAL);
                         return Parser::STRINGVALUE;
                     }
-    \\n             d_val__->get<Tag__::STRING>().append("\n");
-    \\              d_val__->get<Tag__::STRING>().append("\\");
-    [^\"\n\r\\]+    d_val__->get<Tag__::STRING>().append(matched());
+    \\n             d_val__.get<Tag__::ParserString>()->append("\n");
+    \\              d_val__.get<Tag__::ParserString>()->append("\\");
+    [^\"\n\r\\]+    d_val__.get<Tag__::ParserString>()->append(matched());
 }
 
 <XSTRINGA>{
     ''              ;
     '               begin(StartCondition__::INITIAL); return Parser::STRINGVALUE;
     {eol}           {
-                        cerr << "unterminated 'string'." << endl;
+                        llvm::errs() << "unterminated 'string'.\n";
                         begin(StartCondition__::INITIAL);
                         return Parser::STRINGVALUE;
                     }
-    \\n             d_val__->get<Tag__::STRING>().append("\n");
-    \\              d_val__->get<Tag__::STRING>().append("\\");
-    [^'\n\r\\]+     d_val__->get<Tag__::STRING>().append(matched());
+    \\n             d_val__.get<Tag__::ParserString>()->append("\n");
+    \\              d_val__.get<Tag__::ParserString>()->append("\\");
+    [^'\n\r\\]+     d_val__.get<Tag__::ParserString>()->append(matched());
 }
 
 <XLONGSTRING>{
-    "]]"            begin(StartCondition__::INITIAL); *d_val__ = string(matched().c_str() + 1, matched().size() - 2); return Parser::STRINGVALUE;
+    "]]"            begin(StartCondition__::INITIAL); d_val__ = new ParserString(matched().c_str() + 1, matched().size() - 2); return Parser::STRINGVALUE;
     [^\]]+          more();
 }
 

@@ -45,7 +45,8 @@ inline void Parser::print()
 
 inline void Parser::exceptionHandler__(std::exception const &exc)         
 {
-    throw;              // re-implement to handle exceptions thrown by actions
+	// FIXME
+//     throw;              // re-implement to handle exceptions thrown by actions
 }
 
 // $insert namespace-close
