@@ -21,8 +21,8 @@
 
 typedef float __TalesNumber;
 
-// Max 39 for a 32-bits float, LUA uses 12
 #define NUM2STR_DIGITS 7
+		// Lua uses 12, NOTE: look up (again) how many digits before the truncated value isn't exact anymore
 
 // Macro arcanes beyond my mere mortal comprehension
 #define STR_EXPAND(tok) #tok
@@ -33,9 +33,10 @@ enum __TalesTypeIndex {
 // 	TYPEIDX_DVALUE,
 	TYPEIDX_NUMBER,
 	TYPEIDX_STRING,
-    TYPEIDX_TABLE,
-    TYPEIDX_CLASSINST,
-	TYPEIDX_FUNCTION
+  TYPEIDX_TABLE,
+  TYPEIDX_CLASSINST,
+	TYPEIDX_FUNCTION,
+	TYPEIDX_BOOL   // Only used internally to avoid unnecessary bool->float conversions
 	// Followed by the declared classes
 };
 

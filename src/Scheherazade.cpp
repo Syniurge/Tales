@@ -29,38 +29,36 @@
 #include "TalesAST.hpp"
 #include "TalesCodegen.hpp"
 
-using namespace std;
-using namespace FBB;
-using namespace llvm;
 using namespace Tales;
 
 int main(int argc, const char **argv)
 {
-	istream* in;
+	std::istream* in;
 
 	if (argc > 1)
-		in = new ifstream(argv[1]);
+		in = new std::ifstream(argv[1]);
 	else
-		in = new ReadLineStream("> ");
+		in = new FBB::ReadLineStream("> ");
 
 	ASTContext astContext;
 	Parser parser(astContext, *in);
 
 	parser.parse();
 
-	InitializeNativeTarget();
+	llvm::InitializeNativeTarget();
 
 	RuntimeModule* runtimeModule = RuntimeModule::Load();
 	if (!runtimeModule) {
-		cerr << "Module creation and Tales Runtime IR loading failed" << endl;
+		llvm::errs() << "Module creation and Tales Runtime IR loading failed\n";
 		return 1;
 	}
 
 	std::string errorStr;
-	ExecutionEngine* execEngine = EngineBuilder(runtimeModule->module).setErrorStr(&errorStr).create();
+	llvm::ExecutionEngine* execEngine =
+			llvm::EngineBuilder(runtimeModule->module).setErrorStr(&errorStr).create();
 
 	if (!execEngine) {
-		cerr << "JIT engine creation failed: " << errorStr << endl;
+		llvm::errs() << "JIT engine creation failed: " << errorStr << "\n";
 		return 1;
 	}
 
@@ -68,13 +66,14 @@ int main(int argc, const char **argv)
 
 	codegenContext.env.root = astContext.root.get();
 
-	Function* ChunkF = cast<Function>(astContext.parsedChunk->CodegenFunc(codegenContext));
+	llvm::Function* ChunkF = cast<llvm::Function>(astContext.parsedChunk->
+					CodegenFunc(codegenContext));
 	if (!ChunkF) {
-		cerr << "Codegen failed" << endl;
+		llvm::errs() << "Codegen failed\n";
 		return 1;
 	}
 
-//  runtimeModule->module->dump();
+// 	runtimeModule->module->dump();
 
 	runtimeModule->pm.run(*runtimeModule->module);
 

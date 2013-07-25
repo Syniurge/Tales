@@ -50,7 +50,7 @@ struct __TalesGlobalContext {
 struct __TalesGlobalContext globalContext;
 
 // Float-Pointer union
-union __TalesFPU { void* p; __TalesNumber n; };
+union __TalesFPU { void* p; __TalesNumber n; bool b; };
 
 struct __TalesDynamicValue {
 	enum __TalesTypeIndex typeIdx;
@@ -119,9 +119,27 @@ INLINE void __TalesGlobalContextInit() {
 	globalContext.classes = NULL;
 }
 
+INLINE bool __TalesEmptyS(char* s) {
+	return strlen(s) == 0;
+}
+
+INLINE bool __TalesEmptyT(struct __TalesTableHeader* header) {
+	return header->firstPair || header->ipairCount || header->spairCount;
+}
+
+static char sprintfBuffer[NUM2STR_DIGITS+4];
+
 INLINE char* __TalesNtoS(__TalesNumber n) {
-	char sprintfBuffer[NUM2STR_DIGITS+4];
 	snprintf(sprintfBuffer, NUM2STR_DIGITS+3, "%."STR(NUM2STR_DIGITS)"g", n);
+	return strdup(sprintfBuffer);
+}
+
+INLINE __TalesNumber __TalesBtoN(bool b) {
+	return b ? 1.0 : 0.0;
+}
+
+INLINE char* __TalesBtoS(bool b) {
+	snprintf(sprintfBuffer, NUM2STR_DIGITS+3, b ? "true" : "false");
 	return strdup(sprintfBuffer);
 }
 
@@ -144,6 +162,20 @@ INLINE char* __TalesDVtoS(struct __TalesDynamicValue dv) {
 	else {
 		fprintf(stderr, "Type mismatch, expected a string or at least a number\n");
 		return NULL;
+	}
+}
+
+// Booleans are only used internally
+INLINE bool __TalesDVtoB(struct __TalesDynamicValue dv) {
+	if (dv.typeIdx == TYPEIDX_NUMBER)
+		return dv.value.n != 0.0f;
+	else if (dv.typeIdx == TYPEIDX_STRING)
+		return strlen(dv.value.p) != 0;
+	else if (dv.typeIdx == TYPEIDX_TABLE)
+		return __TalesEmptyT(dv.value.p);
+	else {
+		fprintf(stderr, "FIXME, implement DVtoB for other types\n");
+		return false;
 	}
 }
 
@@ -176,8 +208,17 @@ INLINE_INTERNAL void __TalesAssign(void* lhs, enum __TalesTypeIndex* lhsType,
 		// LHS is a dynamic value
 		union __TalesFPU* lhsFPU = (union __TalesFPU*) lhs;
 
+		if (rhsType == TYPEIDX_STRING)
+			lhsFPU->p = strdup(rhs.p);
+		else if (rhsType == TYPEIDX_BOOL)
+			lhsFPU->n = __TalesBtoN(rhs.b);
+		else
+			*lhsFPU = rhs;
+
+		if (rhsType == TYPEIDX_BOOL)
+			rhsType = TYPEIDX_NUMBER;
+
 		*lhsType = rhsType;
-		if (rhsType == TYPEIDX_STRING) lhsFPU->p = strdup(rhs.p); else *lhsFPU = rhs;
 	} else {
 		// LHS is a statically-typed sfield, we'll have to perform the right conversions if needed
 
@@ -188,9 +229,11 @@ INLINE_INTERNAL void __TalesAssign(void* lhs, enum __TalesTypeIndex* lhsType,
 		} else if (*lhsType == TYPEIDX_NUMBER && rhsType == TYPEIDX_STRING) {
 			*(__TalesNumber*) lhs = atof((const char *) rhs.p);
 		} else if (*lhsType == TYPEIDX_STRING && rhsType == TYPEIDX_NUMBER) {
-			char sprintfBuffer[NUM2STR_DIGITS+4]; // hmm
-			snprintf(sprintfBuffer, NUM2STR_DIGITS+3, "%."STR(NUM2STR_DIGITS)"g", rhs.n); // hmm
-			*(char**) lhs = strdup(sprintfBuffer);
+			*(char**) lhs = __TalesNtoS(rhs.n);
+		} else if (*lhsType == TYPEIDX_NUMBER && rhsType == TYPEIDX_BOOL) {
+			*(__TalesNumber*) lhs = __TalesBtoN(rhs.b);
+		} else if (*lhsType == TYPEIDX_STRING && rhsType == TYPEIDX_BOOL) {
+			*(char**) lhs = __TalesBtoS(rhs.b);
 		} else
 			fprintf(stderr, "Type mismatch, can't assign value to statically-typed LHS\n");
 	}
@@ -267,9 +310,9 @@ INLINE_INTERNAL struct __TalesTableHeader* __TalesNewPureTable() {
 	return t;
 }
 
-// A bit confused sir? Am I talking to myself?
-// Yes you CANNOT use the compiler once you reach a level without sfield because
-// you cannot know the LHS type in advance for IR generation
+// Once the compiler reaches a level without a sfield matching the LHS level, it cannot
+// know the LHS type in advance and make a simple Store statement, we need to look
+// for the LHS value location at runtime.
 void __TalesAssignRuntimeT(struct __TalesTableHeader* lastSLevel, const char** remLevels,
 													 unsigned int numRemLevels, union __TalesFPU rhs,
 													 enum __TalesTypeIndex rhsType) {
@@ -291,8 +334,10 @@ void __TalesAssignRuntimeT(struct __TalesTableHeader* lastSLevel, const char** r
 		if (*levelTy == TYPEIDX_NIL) {
 			*levelTy = TYPEIDX_TABLE;
 			levelV->p = __TalesNewPureTable();
-		} else 	if (*levelTy == TYPEIDX_NUMBER || *levelTy == TYPEIDX_STRING || *levelTy == TYPEIDX_FUNCTION) {
-			fprintf(stderr, "Invalid identifier, must go up but one of the level can't hold children");
+		} else 	if (*levelTy == TYPEIDX_NUMBER || *levelTy == TYPEIDX_STRING
+				|| *levelTy == TYPEIDX_FUNCTION) {
+			fprintf(stderr, "Invalid identifier, must go up but one of the levels "
+					"can't hold children");
 			return;
 		}
 
@@ -321,9 +366,8 @@ void __TalesAssignRuntimeT(struct __TalesTableHeader* lastSLevel, const char** r
 	__TalesAssign(levelV, levelTy, (getLevelTy == TYPEIDX_NIL), rhs, rhsType);
 }
 
-// NOTE: inlining GetT makes the inlining pass segfault
 // It's more straightforward than Assign, because we're expected to return a dynamic value
-struct __TalesDynamicValue __TalesGetT(struct __TalesTableHeader* lastSLevel,
+INLINE struct __TalesDynamicValue __TalesGetT(struct __TalesTableHeader* lastSLevel,
 																			 const char** remLevels, unsigned int numRemLevels) {
 	struct __TalesDynamicValue NIL = { TYPEIDX_NIL, NULL };
 

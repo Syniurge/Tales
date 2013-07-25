@@ -31,12 +31,14 @@ namespace Tales {
 		// Expressions
 		Expression,
 		Identifier,
+		Boolean,
 		Number,
 		String,
 		Table,
 		ClassDeclaration,
 		FunctionDeclaration,
 		FunctionCallExpr,
+		UnaryOperation,
 		BinaryOperation,
 
 		// Statements
@@ -46,6 +48,11 @@ namespace Tales {
 		Assignment,
 		Return,
 		IfElse,
+		If,
+		Else,
+		While,
+		Repeat,
+		For,
 
 		// Misc
 		Mutable,
@@ -56,7 +63,6 @@ namespace Tales {
 
 		// Built-in types
 		ParserString,
-		ParserOperator
 		// NOTE: the tag system of the original bisonc++ skeletons which also checks
 		// if the type is built-in boils down to the same thing, except that here we're
 		// avoiding the use of the program-wide RTTI)

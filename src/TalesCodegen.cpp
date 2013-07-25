@@ -16,6 +16,8 @@
  * with Tales.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <type_traits>
+
 #include "TalesAST.hpp"
 #include "TalesCodegen.hpp"
 
@@ -41,9 +43,15 @@ namespace Tales {
 				// NOTE: Clang doesn't define an enum type in the IR, it merely uses i32
 		NumberT = llvm::Type::getFloatTy(llvm::getGlobalContext());
 
+		EmptySF = getFunction("__TalesEmptyS");
+		EmptyTF = getFunction("__TalesEmptyT");
+
 		NtoSF = getFunction("__TalesNtoS");
+		BtoNF = getFunction("__TalesBtoN");
+		BtoSF = getFunction("__TalesBtoS");
 		DVtoNF = getFunction("__TalesDVtoN");
 		DVtoSF = getFunction("__TalesDVtoS");
+		DVtoBF = getFunction("__TalesDVtoB");
 		DVtoPF = getFunction("__TalesDVtoP");
 
 		AssignRuntimeTF = getFunction("__TalesAssignRuntimeT");
@@ -118,6 +126,30 @@ namespace Tales {
 		return cast<llvm::Constant>(context.builder.CreateGEP(StrGV, Idxs));
 	}
 
+	// Helper class to construct GEP instructions
+	class GEPIndexList : public vector<llvm::Value*> {
+		inline void Emplace() {}
+
+		template <typename... Args>
+		inline void Emplace(uint64_t index, Args... args) {
+			emplace_back(ConstantFieldIndex(index));
+			Emplace(args...);
+		}
+	public:
+		template <typename... Args>
+		GEPIndexList(size_type n, Args... args) {
+			reserve(n);
+			Emplace(args...);
+		}
+
+		llvm::Value*& operator[](size_type n) {
+			assert(n < capacity());
+			if (n >= size())
+				resize(n+1);
+			return vector<llvm::Value*>::at(n);
+		}
+	};
+
 	// Clang avoids struct types in function parameters and return values
 	// NOTE: Actually I've found the piece of code that expand structs in CGCall.cpp
 	// and Clang has ABIArgInfo::Direct that is said to stick to LLVM types but there's
@@ -126,7 +158,7 @@ namespace Tales {
 	// with all these expands (and even seems to make the inlining pass segfault)
 	inline llvm::Value* ToFPUE(CodegenContext& context, llvm::Value* V) {
 		if (!V->getType()->isPointerTy()) {
-			V = context.builder.CreateBitCast(V, context.builder.getInt32Ty());
+			V = context.builder.CreateZExtOrBitCast(V, context.builder.getInt32Ty());
 			V = context.builder.CreateZExtOrBitCast(V,
 										context.dataLayout.getIntPtrType(llvm::getGlobalContext()));
 			V = context.builder.CreateIntToPtr(V,
@@ -186,11 +218,34 @@ namespace Tales {
 				llvm::Value* DVtoNA[1] = { V };
 				return context.builder.CreateCall(context.runtimeModule.DVtoNF,
 																					DVtoNA, "dvton");
+			} else if (expectedTy == TYPEIDX_BOOL) {
+				llvm::Value* DVtoBA[1] = { V };
+				return context.builder.CreateCall(context.runtimeModule.DVtoBF,
+																					DVtoBA, "dvtob");
 			} else {
 				llvm::Value* DVtoPA[2] = { ConstantTypeIdx(context, expectedTy), V };
 				return context.builder.CreateCall(context.runtimeModule.DVtoPF,
 																					DVtoPA, "dvtop");
 			}
+		}
+
+		if (expectedTy == TYPEIDX_BOOL) {
+			if (VTy == TYPEIDX_NUMBER)
+				return context.builder.CreateFCmpONE(V,
+								llvm::ConstantFP::get(context.runtimeModule.NumberT, 0.0));
+			else if (VTy == TYPEIDX_STRING) {
+				llvm::Value* EmptySA[1] = { V };
+				llvm::Value* IsEmpty = context.builder.CreateCall(context.runtimeModule.EmptySF,
+																	 EmptySA, "emptys");
+				return context.builder.CreateNot(IsEmpty, "notemptys");
+			} else if (VTy == TYPEIDX_TABLE) {
+				llvm::Value* EmptyTA[1] = { V };
+				llvm::Value* IsEmpty = context.builder.CreateCall(context.runtimeModule.EmptyTF,
+																	 EmptyTA, "emptyt");
+				return context.builder.CreateNot(IsEmpty, "notemptyt");
+			} else
+				return ErrorV("FIXME, not ->bool conversion not implemented"
+								"for this type yet.\n");
 		}
 
 		if (expectedTy == TYPEIDX_NUMBER && VTy == TYPEIDX_STRING) {
@@ -202,7 +257,15 @@ namespace Tales {
 		} else if (expectedTy == TYPEIDX_STRING && VTy == TYPEIDX_NUMBER) {
 			llvm::Value* NtoSA[1] = { V };
 			return context.builder.CreateCall(context.runtimeModule.NtoSF,
-																				NtoSA, "ntos"); // calls the inline __TalesNtoS function
+																				NtoSA, "ntos");
+		} else if (expectedTy == TYPEIDX_NUMBER && VTy == TYPEIDX_BOOL) {
+			llvm::Value* BtoNA[1] = { V };
+			return context.builder.CreateCall(context.runtimeModule.BtoNF,
+																				BtoNA, "bton");
+		} else if (expectedTy == TYPEIDX_STRING && VTy == TYPEIDX_BOOL) {
+			llvm::Value* BtoSA[1] = { V };
+			return context.builder.CreateCall(context.runtimeModule.BtoSF,
+																				BtoSA, "btos");
 		} else {
 			return ErrorV("llvm::Type mismatch");
 		}
@@ -222,6 +285,8 @@ namespace Tales {
 			return DV;
 		} else if (ty == TYPEIDX_NUMBER)
 			return llvm::ConstantFP::get(context.runtimeModule.NumberT, 0.0);
+		else if (ty == TYPEIDX_BOOL)
+			return llvm::ConstantInt::getFalse(llvm::getGlobalContext());
 		else
 			return llvm::ConstantPointerNull::get(
 				cast<llvm::PointerType>(Type(ty).Typegen(context)));
@@ -271,180 +336,11 @@ namespace Tales {
 // 	llvm::StructType* ClassDeclaration::Typegen(CodegenContext& context) const {
 // 	}
 
-	__TalesTypeIndex Identifier::RuntimeType(CodegenEnv& env, const Type** ty) const {
-		vector<string>::size_type i;
-		const FieldList* fields;
-		FieldList::const_iterator field, lastField;
-
-		pair<const Mutable*, llvm::Value*> mu(
-						env.semanticStack.FindMutable(levels[0].name));
-		if (mu.first != nullptr) {
-			// A local/upvalue/argument/field was found
-
-			if (levels.size() == 1) {
-				if (ty) *ty = &mu.first->type;
-				return mu.first->type;
-			}
-
-			if (mu.first->type.structDecl == nullptr) {
-				// If neither a dynamic value, a class instance or a table,
-				// warns that the identifier is wrong
-				if (mu.first->type != TYPEIDX_NIL)
-					llvm::errs() << "Invalid identifier, expected children but stuck at"
-							"number/string/..\n";
-
-				if (ty) *ty = nullptr;
-				return TYPEIDX_NIL;
-			}
-
-			fields = &mu.first->type.structDecl->fields; i = 1;
-		} else {
-			// Otherwise start looking at root table
-			fields = &env.root->fields; i = 0;
-		}
-
-		for (; i < levels.size(); ++i) {
-			for (field = fields->cbegin(), lastField = fields->cend(); field != lastField; ++field) {
-				if (field->name == levels[i].name)
-					break;
-			}
-
-			if (field == lastField)
-				// Not found, runtime type is unknown at the time of compilation
-				return TYPEIDX_NIL;
-
-			if (i == (levels.size() - 1))
-				break;
-
-			if (field->type != TYPEIDX_CLASSINST && field->type != TYPEIDX_TABLE)
-				// Invalid identifier or dynamic value, can't go further
-				return TYPEIDX_NIL;
-
-			fields = &field->type.structDecl->fields;
-		}
-
-		if (ty) *ty = &field->type;
-		return field->type;
-	}
-
-	llvm::Value* Identifier::Codegen(CodegenContext& context) const {
-		// Look first in the locals of the current block, then in globals(TODO), then in the root
-		// NOTE: Lots of shared code with assignments
-
-		vector<string>::size_type levelsSize = levels.size();
-		vector<llvm::Value*> GEPIdxList(3);
-		GEPIdxList[0] = ConstantFieldIndex(0); GEPIdxList[1] = ConstantFieldIndex(1);
-
-		vector<string>::size_type level;
-
-		llvm::Value* LevelPtr;
-		__TalesTypeIndex levelType;
-		const FieldList* levelFields;
-
-		// FIrst find out if one of the locals/arguments/upvalues/class fields
-		// matches the first level
-		pair<const Mutable*, llvm::Value*> mu(
-					context.env.semanticStack.FindMutable(levels[0].name));
-		if (mu.first != nullptr) {
-			// A local/upvalue/argument/field was found
-
-			if (levels.size() == 1)
-				return context.builder.CreateLoad(mu.second);
-
-			if (mu.first->type.structDecl == nullptr && mu.first->type != TYPEIDX_NIL)
-				// If neither a dynamic value, a class instance or a table,
-				// warns that the identifier is wrong
-				return ErrorV("Invalid identifier, expected children but mutable"
-						"is statically typed as a number/string/..");
-
-			level = 1;
-			LevelPtr = context.builder.CreateLoad(mu.second);
-			levelType = mu.first->type;
-			levelFields = &mu.first->type.structDecl->fields;
-		} else {
-			// Otherwise start looking at root table
-
-			level = 0;
-			LevelPtr = context.env.RootV;
-			levelType = context.env.root->RuntimeType(context.env);
-			levelFields = &context.env.root->fields;
-		}
-
-		// We go as far up the struct tree as possible
-		FieldList::Index fieldIdx; llvm::Value* V;
-		for (; level < levelsSize; ++level) {
-			if (levelFields->FindFieldIndex(levels[level].name, fieldIdx)) {
-				GEPIdxList[2] = ConstantFieldIndex(fieldIdx);
-
-				V = context.builder.CreateGEP(LevelPtr, GEPIdxList);
-
-				if (level == (levelsSize - 1))  // structs all the way up, fastest and simplest case
-					return context.builder.CreateLoad(V);
-
-				// If there are still levels to go, check whether the type of the level allows it,
-				// otherwise generates an error and returns nullptr (the assignment must
-				// be invalidated)
-				levelType = levelFields->at(fieldIdx).type;
-				if (levelType != TYPEIDX_CLASSINST && levelType != TYPEIDX_TABLE) {
-					llvm::errs() << "Invalid identifier, ... is a number, string or function, "
-								"it doesn't hold any children\n";;
-					return nullptr;
-				}
-
-				LevelPtr = context.builder.CreateLoad(V);
-				levelFields = &levelFields->at(fieldIdx).type.structDecl->fields;
-			} else {
-				// The structure tree ended at this level so the compiler can't go any further,
-				// it's now up to the LLVM instructions to search for the pair, and create new
-				// pairs and tables if needed.
-				break;
-			}
-		}
-
-		// At this point we know we're expected to return a dynamic value
-
-		llvm::Value* HeaderGEP[2] = { ConstantFieldIndex(0), ConstantFieldIndex(0) };
-		LevelPtr = context.builder.CreateGEP(LevelPtr, HeaderGEP);
-
-		vector<llvm::Constant*> RemainingLevels(levelsSize - level);
-		for (vector<llvm::Constant*>::size_type I = 0; I < RemainingLevels.size(); ++I)
-			RemainingLevels[I] = ConstantString(context, levels[level+I].name);
-		llvm::Constant* RemainingLevelsArray = llvm::ConstantArray::get(
-				llvm::ArrayType::get(RemainingLevels[0]->getType(), RemainingLevels.size()),
-																																		RemainingLevels);
-		llvm::Value* RemainingLevelsGV = new llvm::GlobalVariable(
-				*context.runtimeModule.module, RemainingLevelsArray->getType(), true,
-				llvm::GlobalValue::PrivateLinkage, RemainingLevelsArray);
-
-		llvm::Value* Idxs[2] = { ConstantFieldIndex(0), ConstantFieldIndex(0) };
-		RemainingLevelsGV = context.builder.CreateGEP(RemainingLevelsGV, Idxs);
-
-		if (levelType == TYPEIDX_TABLE) {
-			llvm::Value* GetTA[3] = {
-				LevelPtr,
-				RemainingLevelsGV,
-				llvm::ConstantInt::get(context.runtimeModule.GetTF->getFunctionType()->getParamType(2),
-															 RemainingLevels.size())
-			};
-
-// 			return context.builder.CreateCall(context.runtimeModule.GetTF, GetTA);
-
-			// NOTE: Clang would you stop this bullshit?
-			const unsigned int __IDX0[1] = {0}, __IDX1[1] = {1}; llvm::Value* DV;
-			llvm::Value* PainInTheShellV = context.builder.CreateCall(context.runtimeModule.GetTF, GetTA);
-			llvm::Value* PainInTheShellV0 = context.builder.CreateExtractValue(PainInTheShellV, __IDX0);
-			llvm::Value* PainInTheShellV1 = context.builder.CreateExtractValue(PainInTheShellV, __IDX1);
-
-			DV = context.builder.CreateInsertValue(
-						llvm::UndefValue::get(context.runtimeModule.DynamicValueT),
-						PainInTheShellV0, __IDX0);
-			DV = context.builder.CreateInsertValue(DV, ToFPU(context, PainInTheShellV1),
-						__IDX1);
-
-			return DV;
-		}
-
-		return ErrorV("FIXME");
+	llvm::Value* Boolean::Codegen(CodegenContext& context) const {
+		if (value)
+			return llvm::ConstantInt::getTrue(llvm::getGlobalContext());
+		else
+			return llvm::ConstantInt::getFalse(llvm::getGlobalContext());
 	}
 
 	llvm::Value* Number::Codegen(CodegenContext& context) const {
@@ -452,7 +348,238 @@ namespace Tales {
 	}
 
 	llvm::Value* String::Codegen(CodegenContext& context) const {
-		return ConstantString(context, text);
+		return ConstantString(context, value);
+	}
+
+	// NOTE: C++ really lacks true metaprogramming
+	// What could possibly be the reason why we can't have conditional code?
+	// D has "static if", I see absolutely none...
+	// Assignment::Codegen, Identifier::Codegen and Identifier::RuntimeType share A LOT // of code, but I can't put it in the same function template without splitting it into
+	// very unnatural parts. Extremely twisted illustration below.
+
+	template <typename _ReturnType>
+	struct ActionsOnIdentifier {
+		static_assert(std::is_same<_ReturnType, llvm::Value*>::value ||
+				std::is_same<_ReturnType, const Type&>::value,
+				"Incorrect return type passed to ActionsOnIdentifier");
+
+		typedef _ReturnType ReturnType;
+
+		typedef ReturnType (*OnUnreachableBeforeFPtr)(const Node* node, CodegenContext& context);
+	};
+
+	// Lenghty function template that avoids duplicate code between Assignment::Codegen,
+	// Identifier::Codegen and Identifier::RuntimeType.
+	// As said above C++ unfortunately doesn't make things simple.
+	// The Actions parameter must be a class containing static public functions
+	// and a function pointer constant, refer to examples afterwards.
+	template <typename Actions>
+	typename Actions::ReturnType EmitActionOnIdentifier(const Identifier& id,
+															const Node* node, typename Actions::ContextType& context) {
+		static_assert(std::is_base_of<ActionsOnIdentifier<typename Actions::ReturnType>,
+				Actions>::value, "Actions must derive from ActionsOnIdentifier<ReturnType>");
+
+		typedef Identifier::Levels Levels;
+		const Levels& levels = id.levels;
+
+		CodegenEnv& env = std::is_same<typename Actions::ContextType, CodegenContext>::value ?
+				context.env : context;
+
+		// Look first in the locals of the current block, then in globals(TODO), then in the root
+
+		Levels::const_iterator level = levels.cbegin(),
+				lastLevel = levels.cend();
+
+		llvm::Value* LevelPtr;
+		Type::Ref levelType;
+		const FieldList* levelFields;
+
+		if (isa<String>(**level)) {
+			const string& firstLevelName = cast<String>(**level).value;
+
+			// FIrst find out if one of the locals/arguments/upvalues/class fields
+			// matches the first level
+			pair<const Mutable*, llvm::Value*> mu(
+						env.semanticStack.FindMutable(firstLevelName));
+			if (mu.first != nullptr) {
+				// A local/upvalue/argument/field was found
+
+				if (levels.size() == 1)
+					return Actions::OnStatic(node, context, mu.first->type, mu.second);
+
+				if (mu.first->type.structDecl == nullptr && mu.first->type != TYPEIDX_NIL)
+					// If neither a dynamic value, a class instance or a table,
+					// warns that the identifier is wrong
+					return Actions::OnInvalid(node, context);
+
+				++level;
+				levelType = mu.first->type;
+				levelFields = &mu.first->type.structDecl->fields;
+				if (!Actions::CompileTimeOnly)
+					LevelPtr = context.builder.CreateLoad(mu.second);
+			} else {
+				// Otherwise start looking at root table
+
+				levelType = env.root->RuntimeType(context.env);
+				levelFields = &env.root->fields;
+				if (!Actions::CompileTimeOnly)
+					LevelPtr = env.RootV;
+			}
+
+			// We go as far up the struct tree as possible
+			FieldList::Index fieldIdx;
+			GEPIndexList MutableGEP(3, 0, 1);
+
+			for (; level != lastLevel; ++level) {
+				if (!isa<String>(**level))
+					break;
+
+				const string& levelName = cast<String>(**level).value;
+
+				if (levelFields->FindFieldIndex(levelName, fieldIdx)) {
+					llvm::Value* V;
+
+					levelType = levelFields->at(fieldIdx).type;
+
+					if (!Actions::CompileTimeOnly) {
+						MutableGEP[2] = ConstantFieldIndex(fieldIdx);
+						V = context.builder.CreateGEP(LevelPtr, MutableGEP);
+					}
+
+					if (level == lastLevel - 1)  // structs all the way up, fastest and simplest case
+						return Actions::OnStatic(node, context, levelType, V);
+
+					// If there are still levels to go, check whether the type of the level allows it,
+					// otherwise generates an error and returns nullptr (the assignment must
+					// be invalidated)
+					if (levelType != TYPEIDX_CLASSINST && levelType != TYPEIDX_TABLE)
+						return Actions::OnInvalid(node, context);
+
+					levelFields = &levelFields->at(fieldIdx).type.structDecl->fields;
+					if (!Actions::CompileTimeOnly)
+						LevelPtr = context.builder.CreateLoad(V);
+				} else {
+					// The structure tree ended at this level so the compiler can't go any further,
+					// it's now up to the LLVM instructions to search for the pair, and create new
+					// pairs and tables if needed.
+					break;
+				}
+			}
+		}
+
+		// At this point we know we've delved in the realm of dynamic values.
+
+		if (Actions::CompileTimeOnly)
+			return (*Actions::OnUnreachableBefore)(node, context);
+
+		GEPIndexList HeaderGEP(2, 0, 0);
+		LevelPtr = context.builder.CreateGEP(LevelPtr, HeaderGEP);
+
+		vector<llvm::Constant*> RemainingLevels(lastLevel - level);
+		for (auto& RemLevel : RemainingLevels) {
+			const string& levelName = cast<String>(**level).value;
+						// FIXME FIXME non-string exprs
+			RemLevel = ConstantString(context, levelName);
+			++level;
+		}
+		llvm::Constant* RemainingLevelsArray = llvm::ConstantArray::get(
+				llvm::ArrayType::get(RemainingLevels[0]->getType(), RemainingLevels.size()),
+																																		RemainingLevels);
+		llvm::Value* RemainingLevelsGV = new llvm::GlobalVariable(
+				*context.runtimeModule.module, RemainingLevelsArray->getType(), true,
+				llvm::GlobalValue::PrivateLinkage, RemainingLevelsArray);
+
+		GEPIndexList RemainingLevelsGEP(2, 0, 0);
+		RemainingLevelsGV = context.builder.CreateGEP(RemainingLevelsGV, RemainingLevelsGEP);
+
+		return Actions::OnUnreachable(node, context, levelType, LevelPtr,
+					RemainingLevelsGV, RemainingLevels.size());
+	}
+
+	struct GetTypeOnIdentifier : public ActionsOnIdentifier<const Type&> {
+		typedef CodegenEnv ContextType;
+
+		inline static const Type& OnStatic(const Node* node,
+															CodegenContext& context, const Type& IdTy, llvm::Value* IdV) {
+			return IdTy;
+		}
+
+		inline static const Type& OnInvalid(const Node* node, CodegenContext& context) {
+			llvm::errs() << "Invalid identifier, expected children but mutable"
+							"is statically typed as a number/string/..\n";
+			return Type::DynamicValue;
+		}
+
+		// NOTE: should be optimized out.
+		inline static const Type& OnUnreachable(const Node* node, CodegenContext& context,
+															const Type& levelType, llvm::Value* LevelPtr,
+															llvm::Value* RemainingLevelsGV, size_t RemainingLevelsSize) {
+			return Type::DynamicValue;
+		}
+
+		inline static const Type& _OnUnreachableBefore(const Node* node, CodegenContext& context) {
+			return Type::DynamicValue;
+		}
+		static constexpr OnUnreachableBeforeFPtr OnUnreachableBefore	= &_OnUnreachableBefore;
+
+		static const bool CompileTimeOnly = true;
+	};
+
+	const Type& Identifier::RuntimeType(CodegenEnv& env) const {
+		return EmitActionOnIdentifier<GetTypeOnIdentifier>(*this, this, env);
+	}
+
+	struct GetValueOnIdentifier : public ActionsOnIdentifier<llvm::Value*> {
+		typedef CodegenContext ContextType;
+
+		inline static llvm::Value* OnStatic(const Node* node, CodegenContext& context,
+																					 const Type& IdTy, llvm::Value* IdV) {
+			return context.builder.CreateLoad(IdV);
+		}
+
+		inline static llvm::Value* OnInvalid(const Node* node, CodegenContext& context) {
+			return ErrorV("Invalid identifier, expected children but mutable"
+							"is statically typed as a number/string/..");
+		}
+
+		inline static llvm::Value* OnUnreachable(const Node* node, CodegenContext& context,
+															const Type& levelType, llvm::Value* LevelPtr,
+															llvm::Value* RemainingLevelsGV, size_t RemainingLevelsSize) {
+			if (levelType == TYPEIDX_TABLE) {
+				llvm::Value* GetTA[3] = {
+					LevelPtr,
+					RemainingLevelsGV,
+					llvm::ConstantInt::get(context.runtimeModule.GetTF->getFunctionType()->getParamType(2),
+								RemainingLevelsSize)
+				};
+
+	// 			return context.builder.CreateCall(context.runtimeModule.GetTF, GetTA);
+
+				// NOTE: Clang would you stop this bullshit? I need to fix this horror someday.
+				const unsigned int __IDX0[1] = {0}, __IDX1[1] = {1}; llvm::Value* DV;
+				llvm::Value* PainInTheShellV = context.builder.CreateCall(context.runtimeModule.GetTF, GetTA);
+				llvm::Value* PainInTheShellV0 = context.builder.CreateExtractValue(PainInTheShellV, __IDX0);
+				llvm::Value* PainInTheShellV1 = context.builder.CreateExtractValue(PainInTheShellV, __IDX1);
+
+				DV = context.builder.CreateInsertValue(
+							llvm::UndefValue::get(context.runtimeModule.DynamicValueT),
+							PainInTheShellV0, __IDX0);
+				DV = context.builder.CreateInsertValue(DV, ToFPU(context, PainInTheShellV1),
+							__IDX1);
+
+				return DV;
+			}
+
+			llvm_unreachable("FIXME Identifier::Codegen");
+		}
+
+		static constexpr OnUnreachableBeforeFPtr OnUnreachableBefore	= nullptr;
+
+		static const bool CompileTimeOnly = false;
+	};
+
+	llvm::Value* Identifier::Codegen(CodegenContext& context) const {
+		return EmitActionOnIdentifier<GetValueOnIdentifier>(*this, this, context);
 	}
 
 	llvm::Value* Table::Codegen(CodegenContext& context) const {
@@ -584,24 +711,147 @@ namespace Tales {
 		return TablePtr;
 	}
 
+	llvm::Value* UnaryOperation::Codegen(CodegenContext& context) const {
+		__TalesTypeIndex OperandTy;
+
+		switch (op) {
+			case UnaryOperator::NOT:
+				OperandTy = TYPEIDX_BOOL;
+				break;
+			case UnaryOperator::NEG:
+				OperandTy = TYPEIDX_NUMBER;
+				break;
+		}
+
+		llvm::Value* S = CheckAndConvert(context, OperandTy,
+																s->Codegen(context), s->RuntimeType(context.env));
+
+		if (!S)
+			return NilValue(context, RuntimeType(context.env));
+
+		switch (op) {
+			case UnaryOperator::NOT: return context.builder.CreateNot(S, "nottmp");
+			case UnaryOperator::NEG: return context.builder.CreateFNeg(S, "negtmp");
+		}
+	}
+
 	llvm::Value* BinaryOperation::Codegen(CodegenContext& context) const {
-		llvm::Value* L = CheckAndConvert(context, TYPEIDX_NUMBER,
+		__TalesTypeIndex OperandTy;
+
+		switch (op) {
+			case BinaryOperator::AND:
+			case BinaryOperator::OR:
+				OperandTy = TYPEIDX_BOOL;
+				break;
+			default:
+				OperandTy = TYPEIDX_NUMBER;
+		}
+
+		llvm::Value* L = CheckAndConvert(context, OperandTy,
 																lhs->Codegen(context), lhs->RuntimeType(context.env));
-		llvm::Value* R = CheckAndConvert(context, TYPEIDX_NUMBER,
+		llvm::Value* R = CheckAndConvert(context, OperandTy,
 																rhs->Codegen(context), rhs->RuntimeType(context.env));
 
 		if (!L || !R)
-			return llvm::ConstantFP::get(context.runtimeModule.NumberT, 0.0);
+			return NilValue(context, RuntimeType(context.env));
 
 		// NOTE: if either L or R's type cannot be converted into a number,
 		// L or R will be 0 so beware of divs.
 		switch (op) {
-			case Operator::PLUS: return context.builder.CreateFAdd(L, R, "addtmp");
-			case Operator::MINUS: return context.builder.CreateFSub(L, R, "subtmp");
-			case Operator::MULT: return context.builder.CreateFMul(L, R, "multmp");
-			case Operator::LT: return context.builder.CreateFCmpULT(L, R, "letmp");
-			default: return ErrorV("invalid binary operator");
+			case BinaryOperator::AND: return context.builder.CreateAnd(L, R, "andtmp");
+			case BinaryOperator::OR: return context.builder.CreateOr(L, R, "ortmp");
+			case BinaryOperator::EQ: return context.builder.CreateFCmpOEQ(L, R, "eqtmp");
+			case BinaryOperator::NE: return context.builder.CreateFCmpONE(L, R, "netmp");
+			case BinaryOperator::PLUS: return context.builder.CreateFAdd(L, R, "addtmp");
+			case BinaryOperator::MINUS: return context.builder.CreateFSub(L, R, "subtmp");
+			case BinaryOperator::MULT: return context.builder.CreateFMul(L, R, "multmp");
+			case BinaryOperator::DIV: return context.builder.CreateFDiv(L, R, "divtmp");
+			case BinaryOperator::GT: return context.builder.CreateFCmpOGT(L, R, "getmp");
+			case BinaryOperator::GE: return context.builder.CreateFCmpOGE(L, R, "geemp");
+			case BinaryOperator::LT: return context.builder.CreateFCmpOLT(L, R, "letmp");
+			case BinaryOperator::LE: return context.builder.CreateFCmpOLE(L, R, "leemp");
+			default: return ErrorV("FIXME implement MOD");
 		}
+	}
+
+	llvm::Value* IfElse::Codegen(CodegenContext& context) const {
+		llvm::Value* CondV = CheckAndConvert(context, TYPEIDX_BOOL,
+												cond->Codegen(context), cond->RuntimeType(context.env));
+
+		llvm::Function* F = context.builder.GetInsertBlock()->getParent();
+
+		llvm::BasicBlock* ThenBB = llvm::BasicBlock::Create(llvm::getGlobalContext(), "then", F);
+		llvm::BasicBlock* ElseBB = _else ?
+				llvm::BasicBlock::Create(llvm::getGlobalContext(), "else") : nullptr;
+		llvm::BasicBlock *MergeBB = llvm::BasicBlock::Create(llvm::getGlobalContext(), "ifcont");
+
+		context.builder.CreateCondBr(CondV, ThenBB, ElseBB ? ElseBB : MergeBB);
+
+		// Emit then block.
+		context.builder.SetInsertPoint(ThenBB);
+		then->Codegen(context);
+
+		context.builder.CreateBr(MergeBB);
+		ThenBB = context.builder.GetInsertBlock();
+
+		// Emit else block if any.
+		if (ElseBB) {
+			F->getBasicBlockList().push_back(ElseBB);
+
+			context.builder.SetInsertPoint(ElseBB);
+			_else->Codegen(context);
+
+			context.builder.CreateBr(MergeBB);
+			ElseBB = context.builder.GetInsertBlock();
+		}
+
+		// Emit merge block.
+		F->getBasicBlockList().push_back(MergeBB);
+		context.builder.SetInsertPoint(MergeBB);
+
+		return nullptr;
+	}
+
+	template<bool isRepeat>
+	llvm::Value* WhileRepeat<isRepeat>::Codegen(CodegenContext& context) const {
+		llvm::Value* CondV = CheckAndConvert(context, TYPEIDX_BOOL,
+												cond->Codegen(context), cond->RuntimeType(context.env));
+
+		llvm::Function* F = context.builder.GetInsertBlock()->getParent();
+
+		llvm::BasicBlock* HeaderBB;
+		if (!isRepeat)
+			llvm::BasicBlock* HeaderBB = llvm::BasicBlock::Create(llvm::getGlobalContext(), "whileheader", F);
+		llvm::BasicBlock* DoBB = llvm::BasicBlock::Create(llvm::getGlobalContext(), "do");
+		llvm::BasicBlock *MergeBB = llvm::BasicBlock::Create(llvm::getGlobalContext(), "whilecont");
+
+		if (!isRepeat) {
+			context.builder.CreateBr(HeaderBB);
+
+			context.builder.SetInsertPoint(HeaderBB);
+			context.builder.CreateCondBr(CondV, DoBB, MergeBB);
+		} else
+			context.builder.CreateBr(DoBB);
+
+		F->getBasicBlockList().push_back(DoBB);
+		context.builder.SetInsertPoint(DoBB);
+		_do->Codegen(context);
+
+		if (!isRepeat)
+			context.builder.CreateBr(HeaderBB);
+		else
+			context.builder.CreateCondBr(CondV, DoBB, MergeBB);
+
+		F->getBasicBlockList().push_back(MergeBB);
+		context.builder.SetInsertPoint(MergeBB);
+
+		return nullptr;
+	}
+	template llvm::Value* WhileRepeat<false>::Codegen(CodegenContext& context) const;
+	template llvm::Value* WhileRepeat<true>::Codegen(CodegenContext& context) const;
+
+	llvm::Value* For::Codegen(CodegenContext& context) const {
+		return nullptr;
 	}
 
 	llvm::Value* Block::Codegen(CodegenContext& context) const {
@@ -870,6 +1120,9 @@ namespace Tales {
 		} else if (ExpectedTy == context.builder.getInt8PtrTy() && VTy == TYPEIDX_NUMBER) {
 			llvm::Value* NtoSA[1] = { V };
 			return context.builder.CreateCall(context.runtimeModule.NtoSF, NtoSA, "ntos");
+		} else if (ExpectedTy == context.builder.getInt8PtrTy() && VTy == TYPEIDX_BOOL) {
+			llvm::Value* BtoSA[1] = { V };
+			return context.builder.CreateCall(context.runtimeModule.BtoSF, BtoSA, "btos");
 		} else {
 			return ErrorV("FIXME?");
 		}
@@ -893,15 +1146,15 @@ namespace Tales {
 			return context.builder.CreateCall(ExtF, ExtA);
 		}
 
-		const Type* idTy;
-		__TalesTypeIndex idTyR = funcId.RuntimeType(context.env, &idTy);
+		// No external function match, it has to be a Tales function
+		const Type& idTy = funcId.RuntimeType(context.env);
 
-		if (idTyR != TYPEIDX_FUNCTION && idTyR != TYPEIDX_NIL)
+		if (idTy != TYPEIDX_FUNCTION && idTy != TYPEIDX_NIL)
 			return ErrorV("Not a function");
 
-		if (idTyR == TYPEIDX_FUNCTION) {
+		if (idTy == TYPEIDX_FUNCTION) {
 			// llvm::Function is reachable in the s-tree
-			const FunctionType* fTy = idTy->funcType;
+			const FunctionType* fTy = idTy.funcType;
 
 			// If argument mismatch error.
 			if (fTy->args.size() != callArgs.size())
@@ -966,10 +1219,12 @@ namespace Tales {
 				ArgsV[i] = CheckAndConvert(context, TYPEIDX_NIL, callArgs[i]->Codegen(context),
 																	 callArgs[i]->RuntimeType(context.env));
 
-// 			llvm::Value* Idxs[2] = { ConstantFieldIndex(0), ConstantFieldIndex(2) };  // ->agnosticFunc
-// 			llvm::Value* CalleeV = context.builder.CreateLoad(context.builder.CreateGEP(FuncV, Idxs)); // TODO FIXME test if funcId.Codegen(context) == nil
+// 			GEPIndexList AgnosticFuncGEP(2, 0, 2);
+// 			llvm::Value* CalleeV = context.builder.CreateLoad(context.builder.CreateGEP(FuncV, AgnosticFuncGEP)); // TODO FIXME test if funcId.Codegen(context) == nil
 // 			llvm::Function *CalleeF = cast<llvm::Function>(context.builder.CreatePointerCast(CalleeV, ));
-// 			
+
+// 			assert(false && "OUYA, Agnostic function calls incomplete!");
+
 // 			return context.builder.CreateCall(CalleeF, ArgsV);
 		}
 	}
@@ -982,118 +1237,53 @@ namespace Tales {
 		// TODO: Tail calls
 	}
 
-	llvm::Value* Assignment::Codegen(CodegenContext& context) const {
-		// NOTE: the code for an LHS identifier to be assigned is different from RHS "read-only" identifier
+	struct AssignOnIdentifier : public ActionsOnIdentifier<llvm::Value*> {
+		typedef CodegenContext ContextType;
+		
+		inline static llvm::Value* OnStatic(const Node* node, CodegenContext& context,
+																					 const Type& IdTy, llvm::Value* IdV) {
+			const ObjectUniquePtr<Expression>& rhs = cast<Assignment>(node)->rhs;
 
-		vector<string>::size_type levelsSize = lhs.levels.size();
-		vector<llvm::Value*> GEPIdxList(3);
-		GEPIdxList[0] = ConstantFieldIndex(0); GEPIdxList[1] = ConstantFieldIndex(1);
-
-		vector<string>::size_type level;
-
-		llvm::Value* LevelPtr;
-		__TalesTypeIndex levelType;
-		const FieldList* levelFields;
-
-		// FIrst find out if one of the locals/arguments/upvalues/class fields
-		// matches the first level
-		pair<const Mutable*, llvm::Value*> mu(
-					context.env.semanticStack.FindMutable(lhs.levels[0].name));
-		if (mu.first != nullptr) {
-			// A local/upvalue/argument/field was found
-
-			if (levelsSize == 1)
-				return context.builder.CreateStore(CheckAndConvert(context, mu.first->type,
-												rhs->Codegen(context), rhs->RuntimeType(context.env)), mu.second);
-
-			if (mu.first->type.structDecl == nullptr && mu.first->type != TYPEIDX_NIL)
-				// If neither a dynamic value, a class instance or a table, warns that
-				// the identifier is wrong.
-				return ErrorV("Invalid LHS identifier, expected children but mutable "
-							"is statically typed as a number/string/..");
-
-			level = 1;
-			LevelPtr = context.builder.CreateLoad(mu.second);
-			levelType = mu.first->type;
-			levelFields = &mu.first->type.structDecl->fields;
-		} else {
-			// Otherwise start looking at root table
-
-			level = 0;
-			LevelPtr = context.env.RootV;
-			levelType = context.env.root->RuntimeType(context.env);
-			levelFields = &context.env.root->fields;
+			return context.builder.CreateStore(CheckAndConvert(context, IdTy,
+													rhs->Codegen(context), rhs->RuntimeType(context.env)), IdV);
 		}
 
-		// We go as far up the struct tree as possible
-		FieldList::Index fieldIdx; llvm::Value* LHSPtr;
-		for (; level < levelsSize; ++level) {
-			if (levelFields->FindFieldIndex(lhs.levels[level].name, fieldIdx)) {
-				GEPIdxList[2] = ConstantFieldIndex(fieldIdx);
+		inline static llvm::Value* OnInvalid(const Node* node, CodegenContext& context) {
+			return GetValueOnIdentifier::OnInvalid(node, context);
+		}
 
-				LHSPtr = context.builder.CreateGEP(LevelPtr, GEPIdxList);
+		inline static llvm::Value* OnUnreachable(const Node* node, CodegenContext& context,
+															const Type& levelType, llvm::Value* LevelPtr,
+															llvm::Value* RemainingLevelsGV, size_t RemainingLevelsSize) {
+			const ObjectUniquePtr<Expression>& rhs = cast<Assignment>(node)->rhs;
 
-				if (level == (levelsSize - 1))  // structs all the way up, fastest and simplest case
-					return context.builder.CreateStore(
-							CheckAndConvert(context, levelFields->at(fieldIdx).type, rhs->Codegen(context),
-															rhs->RuntimeType(context.env)),
-							LHSPtr);
+			llvm::Value* RHS = rhs->Codegen(context), * RHSTI;
+			ReachForDV(context, RHS, rhs->RuntimeType(context.env), RHSTI);
 
-				// If there are still levels to go, check whether the type of the level allows it,
-				// otherwise generates an error and returns nullptr (the assignment must
-				// be invalidated).
-				levelType = levelFields->at(fieldIdx).type;
-				if (levelType != TYPEIDX_CLASSINST && levelType != TYPEIDX_TABLE) {
-					llvm::errs() << "Invalid identifier, ... is a number, string or function, "
-									"it doesn't hold any children\n";
-					return nullptr;
-				}
+			if (levelType == TYPEIDX_TABLE) {
+				llvm::Value* AssignRuntimeTA[5] = {
+					LevelPtr,
+					RemainingLevelsGV,
+					llvm::ConstantInt::get(
+								context.runtimeModule.AssignRuntimeTF->getFunctionType()->getParamType(2),
+								RemainingLevelsSize),
+					ToFPUE(context, RHS),
+					RHSTI
+				};
 
-				LevelPtr = context.builder.CreateLoad(LHSPtr);
-				levelFields = &levelFields->at(fieldIdx).type.structDecl->fields;
-			} else {
-				// The structure tree ended at this level so the compiler can't go any further,
-				// it's now up to the LLVM instructions to search for the pair, and create
-				// new pairs and tables if needed.
-				break;
+				return context.builder.CreateCall(context.runtimeModule.AssignRuntimeTF,
+																					AssignRuntimeTA);
 			}
+
+			llvm_unreachable("FIXME Assignment::Codegen");
 		}
 
-		llvm::Value* RHS = rhs->Codegen(context), * RHSTI;
-		ReachForDV(context, RHS, rhs->RuntimeType(context.env), RHSTI);
+		static constexpr OnUnreachableBeforeFPtr OnUnreachableBefore	= nullptr;
 
-		if (levelType == TYPEIDX_TABLE) {
-			llvm::Value* HeaderGEP[2] = { ConstantFieldIndex(0), ConstantFieldIndex(0) };
-			LevelPtr = context.builder.CreateGEP(LevelPtr, HeaderGEP);
-			// Needed because AssignRuntime expects a pointer to the header,
-			// not the whole structure even if there is no spair.
+		static const bool CompileTimeOnly = false;
+	};
 
-			vector<llvm::Constant*> RemainingLevels(levelsSize - level);
-			for (vector<llvm::Constant*>::size_type I = 0; I < RemainingLevels.size(); ++I)
-				RemainingLevels[I] =  ConstantString(context, lhs.levels[level+I].name);
-			llvm::Constant* RemainingLevelsArray = llvm::ConstantArray::get(
-					llvm::ArrayType::get(RemainingLevels[0]->getType(), RemainingLevels.size()),
-					RemainingLevels);
-			llvm::Value* RemainingLevelsGV = new llvm::GlobalVariable(
-					*context.runtimeModule.module, RemainingLevelsArray->getType(), true,
-					llvm::GlobalValue::PrivateLinkage, RemainingLevelsArray);
-			llvm::Value* Idxs[2] = { ConstantFieldIndex(0), ConstantFieldIndex(0) };
-			RemainingLevelsGV = context.builder.CreateGEP(RemainingLevelsGV, Idxs);
-
-			llvm::Value* AssignRuntimeTA[5] = {
-				LevelPtr,
-				RemainingLevelsGV,
-				llvm::ConstantInt::get(
-							context.runtimeModule.AssignRuntimeTF->getFunctionType()->getParamType(2),
-							RemainingLevels.size()),
-				ToFPUE(context, RHS),
-				RHSTI
-			};
-
-			return context.builder.CreateCall(context.runtimeModule.AssignRuntimeTF,
-																				AssignRuntimeTA);
-		}
-
-		llvm_unreachable("Assignment FIXME");
+	llvm::Value* Assignment::Codegen(CodegenContext& context) const {
+		return EmitActionOnIdentifier<AssignOnIdentifier>(lhs, this, context);
 	}
 }

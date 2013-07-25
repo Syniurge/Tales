@@ -8,15 +8,6 @@ struct ParserString : public Base, public std::string
 	static bool classof(const Base *B) { return B->getKind() == ObjectKind::ParserString; }
 };
 
-struct ParserOperator : public Base
-{
-	const Operator op;
-	ParserOperator(const Operator op) : Base(ObjectKind::ParserOperator), op(op) {}
-	static bool classof(const Base *B) { return B->getKind() == ObjectKind::ParserOperator; }
-
-	operator Operator() const { return op; }
-};
-
 namespace Meta__
 {
     template <Tag__ tag>

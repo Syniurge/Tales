@@ -63,9 +63,15 @@ namespace Tales {
 
 		// LLVM Functions from TalesRuntime.c IR, most of them are inlined
 
+		llvm::Function* EmptySF;
+		llvm::Function* EmptyTF;
+
 		llvm::Function* NtoSF;
+		llvm::Function* BtoNF;
+		llvm::Function* BtoSF;
 		llvm::Function* DVtoNF;
 		llvm::Function* DVtoSF;
+		llvm::Function* DVtoBF;
 		llvm::Function* DVtoPF;
 
 		llvm::Function* AssignRuntimeTF;

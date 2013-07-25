@@ -27,7 +27,7 @@
  * However it comes at the cost of making many heaps allocations.. it's not the perfect solution yet but it's confusing enough to make me accept heap allocs for now.
  * The optimal way as far as I can see is to have a class with a storage similar to llvm::SmallVector and big enough to hold all the types specified by
  * %polymorphic AND other types that may derive from Expression, Statement, ... (so needs a new directive), and the tag. Then the get() function takes care
- * of initializing that storage correctly. But I have no idea if C++ provide the tools for this, I haven't found anything yet.
+ * of initializing that storage correctly. Ulterior NOTE: no this approach has issues, sticking with heap allocs for now.
  */
 
 %baseclass-preinclude "TalesAST.hpp"
@@ -41,12 +41,20 @@
 // bisonc++ takes care of choosing enum values that do not conflict with chars
 %token NAME NUMBERVALUE STRINGVALUE
 
-%token AND BREAK DO ELSEIF ELSE END FALSE FOR FUNCTION IF IN LOCAL NIL NOT OR REPEAT RETURN THEN TRUE UNTIL WHILE
+%token BREAK DO ELSEIF ELSE END FALSE FOR FUNCTION IF IN LOCAL NIL NOT REPEAT RETURN THEN TRUE UNTIL WHILE
 %token CLASS NUMBERTYPE STRINGTYPE TABLETYPE
 
-%token DOTS CONCAT EQ GE LE NE
+%token DOTS
 
-// NOTE: Bisonc++'s skeletons were modified so that instead of generating its own tags it reuses the LLVM-style RTTI
+%left AND OR
+%left EQ NE LE '<' GE '>'
+%left '+' '-'
+%left '*' '%' '/'
+%left CONCAT
+
+// NOTE: Bisonc++'s skeletons were modified so that instead of generating its own tags
+// it reuses the LLVM-style RTTI and the polymorphic type doesn't hold the value itself but
+// a unique_ptr<>
 %polymorphic
 		ParserString: ParserString;
 		Type: Type;
@@ -59,13 +67,12 @@
 		FieldList: FieldList;
 		ArgumentList: ArgumentList;
 		CallArgumentList: CallArgumentList;
-		ParserOperator: ParserOperator
 
 %type <ParserString> NAME NUMBERVALUE STRINGVALUE
 
 %type <Type> type
-%type <Expression> expr class_expr table_expr func_expr
-%type <Statement> stmt class_stmt func_stmt
+%type <Expression> expr class_expr table_expr func_expr unary_op binary_op
+%type <Statement> stmt if_stmt while_stmt for_stmt class_stmt func_stmt
 
 %type <Identifier> ident
 %type <Mutable> local class_decl_field table_spair func_decl_arg
@@ -74,11 +81,6 @@
 %type <FieldList> class_decl_fields
 %type <ArgumentList> func_decl_args
 %type <CallArgumentList> func_call_args
-%type <ParserOperator> binary_op
-
-
-%left '+' '-'
-%left '*' '%' '/'
 
 
 %start program
@@ -123,7 +125,7 @@ local : LOCAL NAME { $$ = new Mutable(move(*$2)); }
 			}
 		;
 
-stmt : class_stmt | func_stmt { $$ = move($1); }
+stmt : if_stmt | while_stmt | for_stmt | class_stmt | func_stmt { $$ = move($1); }
 		| RETURN expr { $$ = new Return(move($2)); }
 		| ident '=' expr { $$ = new Assignment(move(*$1), move($3)); }
 		| ident '(' func_call_args ')' { $$ = new FunctionCallStmt(move(*$1), move(*$3)); }
@@ -131,10 +133,12 @@ stmt : class_stmt | func_stmt { $$ = move($1); }
 
 expr : NUMBERVALUE { $$ = new Number( atof( $1->c_str() ) ); }
 		| STRINGVALUE { $$ = new String(move(*$1)); }
-		| class_expr | table_expr | func_expr { $$ = move($1); }
+		| TRUE { $$ = new Boolean(true); }
+		| FALSE { $$ = new Boolean(false); }
 		| ident '(' func_call_args ')' { $$ = new FunctionCallExpr(move(*$1), move(*$3)); }
 		| ident { $$ = move($1); }
-		| expr binary_op expr { $$ = new BinaryOperation(move($1), move(*$2), move($3)); }
+		| class_expr | table_expr | func_expr { $$ = move($1); }
+		| unary_op | binary_op { $$ = move($1); }
 		| '(' expr ')' { $$ = move($2); }
 		;
 
@@ -145,15 +149,15 @@ type : NUMBERTYPE { $$ = new Type(TYPEIDX_NUMBER); }
 		;
 
 ident : NAME {
-				$$ = new Identifier;
-				$$->levels.emplace_back(move(*$1));
+				ObjectUniquePtr<String> name(new String(move(*$1)));
+				$$ = new Identifier(move(name));
 			}
-		| NAME '[' expr ']' {
-				$$ = new Identifier;
-				$$->levels.emplace_back(move(*$1), move($3));
+		| '[' expr ']' {	$$ = new Identifier(move($2)); }
+		| ident '.' NAME {
+				ObjectUniquePtr<String> name(new String(move(*$3)));
+				$1->EmplaceLevel(move(name));
 			}
-		| ident '.' NAME { $1->levels.emplace_back(move(*$3)); }
-		| ident '.' NAME '[' expr ']' { $1->levels.emplace_back(move(*$3), move($5)); }
+		| ident '[' expr ']' { $1->EmplaceLevel(move($3)); }
 		;
 
 class_expr : CLASS '{' class_decl_fields '}' { $$ = new ClassDeclaration(move(*$3)); }
@@ -236,9 +240,32 @@ func_call_args : { $$ = new CallArgumentList; }
 		| func_call_args ',' expr  { $1->emplace_back(move($3)); }
 		;
 
-binary_op : EQ | NE | GE | '>' | LE | '<' | AND | OR | NOT { $$ = new ParserOperator(Operator::NOT); }
-		| '+' { $$ = new ParserOperator(Operator::PLUS); }
-		| '-' { $$ = new ParserOperator(Operator::MINUS); }
-		| '*' { $$ = new ParserOperator(Operator::MULT); }
-		| '/' | '%' | CONCAT { $$ = new ParserOperator(Operator::DIV); }
+if_stmt: IF expr THEN stmts END { $$ = new IfElse(move($2), move($4)); }
+		| IF expr THEN stmts ELSE stmts END { $$ = new IfElse(move($2), move($4), move($6)); }
+		;
+
+while_stmt: WHILE expr DO stmts END { $$ = new While(move($2), move($4)); }
+		| REPEAT stmts UNTIL expr { $$ = new Repeat(move($2), move($4)); }
+		;
+
+for_stmt: FOR ident '=' expr ',' expr DO stmts END { $$ = new For(move(*$2), move($4), move($6), move($8)); }
+		| FOR ident '=' expr ',' expr ',' expr DO stmts END { $$ = new For(move(*$2), move($4), move($6), move($8), move($10)); }
+		;
+
+unary_op : NOT expr { $$ = new UnaryOperation(UnaryOperator::NOT, move($2)); }
+		| '-' expr { $$ = new UnaryOperation(UnaryOperator::NEG, move($2)); }
+		;
+
+binary_op : expr EQ expr { $$ = new BinaryOperation(move($1), BinaryOperator::EQ, move($3)); }
+		| expr NE expr { $$ = new BinaryOperation(move($1), BinaryOperator::NE, move($3)); }
+		| expr GE expr { $$ = new BinaryOperation(move($1), BinaryOperator::GE, move($3)); }
+		| expr '>' expr { $$ = new BinaryOperation(move($1), BinaryOperator::GT, move($3)); }
+		| expr LE expr { $$ = new BinaryOperation(move($1), BinaryOperator::LE, move($3)); }
+		| expr '<' expr { $$ = new BinaryOperation(move($1), BinaryOperator::LT, move($3)); }
+		| expr AND expr { $$ = new BinaryOperation(move($1), BinaryOperator::AND, move($3)); }
+		| expr OR expr { $$ = new BinaryOperation(move($1), BinaryOperator::OR, move($3));; }
+		| expr '+' expr { $$ = new BinaryOperation(move($1), BinaryOperator::PLUS, move($3)); }
+		| expr '-' expr { $$ = new BinaryOperation(move($1), BinaryOperator::MINUS, move($3)); }
+		| expr '*' expr { $$ = new BinaryOperation(move($1), BinaryOperator::MULT, move($3)); }
+		| '/' | '%' | expr CONCAT expr { $$ = new BinaryOperation(move($1), BinaryOperator::DIV, move($3)); }
 		;
