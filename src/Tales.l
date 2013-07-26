@@ -101,7 +101,8 @@ table               return Parser::TABLETYPE;
 
 .                   llvm::errs() << "unknown token\"" << matched() << "\" has been ignored.\n";
 
-<XSTRINGQ>{
+<XSTRINGQ>
+{
     \"\"            ;
     \"              begin(StartCondition__::INITIAL); return Parser::STRINGVALUE;
     {eol}           {
@@ -114,7 +115,8 @@ table               return Parser::TABLETYPE;
     [^\"\n\r\\]+    d_val__.get<Tag__::ParserString>()->append(matched());
 }
 
-<XSTRINGA>{
+<XSTRINGA>
+{
     ''              ;
     '               begin(StartCondition__::INITIAL); return Parser::STRINGVALUE;
     {eol}           {
@@ -127,12 +129,14 @@ table               return Parser::TABLETYPE;
     [^'\n\r\\]+     d_val__.get<Tag__::ParserString>()->append(matched());
 }
 
-<XLONGSTRING>{
+<XLONGSTRING>
+{
     "]]"            begin(StartCondition__::INITIAL); d_val__ = new ParserString(matched().c_str() + 1, matched().size() - 2); return Parser::STRINGVALUE;
     [^\]]+          more();
 }
 
-<XLONGCOMMENT>{
+<XLONGCOMMENT>
+{
     "]]--"          begin(StartCondition__::INITIAL);
     [^\]]+          ;
 }

@@ -351,10 +351,75 @@ namespace Tales {
 		return ConstantString(context, value);
 	}
 
-	// NOTE: C++ really lacks true metaprogramming
-	// What could possibly be the reason why we can't have conditional code?
-	// D has "static if", I see absolutely none...
-	// Assignment::Codegen, Identifier::Codegen and Identifier::RuntimeType share A LOT // of code, but I can't put it in the same function template without splitting it into
+	const Type& Identifier::RuntimeType(CodegenEnv& env) const {
+		Levels::const_iterator level = levels.cbegin(),
+				lastLevel = levels.cend();
+		const FieldList* fields;
+		FieldList::const_iterator field, lastField;
+
+		if (!isa<String>(**level))
+			return Type::DynamicValue;
+
+		const string& firstLevelName = cast<String>(**level).value;
+
+		// Look first for a local/argument/upvalue/class field
+		pair<const Mutable*, llvm::Value*> mu(
+						env.semanticStack.FindMutable(firstLevelName));
+		if (mu.first != nullptr) {
+			// A local/upvalue/argument/field was found
+
+			if (levels.size() == 1)
+				return mu.first->type;
+
+			if (mu.first->type.structDecl == nullptr) {
+				// If neither a dynamic value, a class instance or a table,
+				// warns that the identifier is wrong
+				if (mu.first->type != TYPEIDX_NIL)
+					llvm::errs() << "Invalid identifier, expected children but stuck at"
+							"number/string/..\n";
+
+				return Type::DynamicValue;
+			}
+
+			fields = &mu.first->type.structDecl->fields;
+			++level;
+		} else {
+			// Otherwise start looking at root table
+			fields = &env.root->fields;
+		}
+
+		for (; level != lastLevel; ++level) {
+			if (!isa<String>(**level))
+				return Type::DynamicValue;
+
+			const string& levelName = cast<String>(**level).value;
+
+			for (field = fields->cbegin(), lastField = fields->cend(); field != lastField; ++field) {
+				if (field->name == levelName)
+					break;
+			}
+
+			if (field == lastField)
+				// Not found, runtime type is unknown at the time of compilation
+				return Type::DynamicValue;
+
+			if (level == lastLevel -1)
+				break;
+
+			if (field->type != TYPEIDX_CLASSINST && field->type != TYPEIDX_TABLE)
+				// Invalid identifier or dynamic value, can't go further
+				return Type::DynamicValue;
+
+			fields = &field->type.structDecl->fields;
+		}
+
+		return field->type;
+	}
+
+	// NOTE: C++ really lacks true metaprogramming, and I'll probably migrate to D in
+	// the future since the core designers of C++ have stated their opposition to static if.
+	// Assignment::Codegen, Identifier::Codegen and Identifier::RuntimeType share A LOT
+	// of code, but I can't put it in the same function template without splitting it into
 	// very unnatural parts. Extremely twisted illustration below.
 
 	template <typename _ReturnType>
@@ -364,8 +429,6 @@ namespace Tales {
 				"Incorrect return type passed to ActionsOnIdentifier");
 
 		typedef _ReturnType ReturnType;
-
-		typedef ReturnType (*OnUnreachableBeforeFPtr)(const Node* node, CodegenContext& context);
 	};
 
 	// Lenghty function template that avoids duplicate code between Assignment::Codegen,
@@ -375,15 +438,12 @@ namespace Tales {
 	// and a function pointer constant, refer to examples afterwards.
 	template <typename Actions>
 	typename Actions::ReturnType EmitActionOnIdentifier(const Identifier& id,
-															const Node* node, typename Actions::ContextType& context) {
+															const Node* node, CodegenContext& context) {
 		static_assert(std::is_base_of<ActionsOnIdentifier<typename Actions::ReturnType>,
 				Actions>::value, "Actions must derive from ActionsOnIdentifier<ReturnType>");
 
 		typedef Identifier::Levels Levels;
 		const Levels& levels = id.levels;
-
-		CodegenEnv& env = std::is_same<typename Actions::ContextType, CodegenContext>::value ?
-				context.env : context;
 
 		// Look first in the locals of the current block, then in globals(TODO), then in the root
 
@@ -400,7 +460,7 @@ namespace Tales {
 			// FIrst find out if one of the locals/arguments/upvalues/class fields
 			// matches the first level
 			pair<const Mutable*, llvm::Value*> mu(
-						env.semanticStack.FindMutable(firstLevelName));
+						context.env.semanticStack.FindMutable(firstLevelName));
 			if (mu.first != nullptr) {
 				// A local/upvalue/argument/field was found
 
@@ -415,15 +475,13 @@ namespace Tales {
 				++level;
 				levelType = mu.first->type;
 				levelFields = &mu.first->type.structDecl->fields;
-				if (!Actions::CompileTimeOnly)
-					LevelPtr = context.builder.CreateLoad(mu.second);
+				LevelPtr = context.builder.CreateLoad(mu.second);
 			} else {
 				// Otherwise start looking at root table
 
-				levelType = env.root->RuntimeType(context.env);
-				levelFields = &env.root->fields;
-				if (!Actions::CompileTimeOnly)
-					LevelPtr = env.RootV;
+				levelType = context.env.root->RuntimeType(context.env);
+				levelFields = &context.env.root->fields;
+				LevelPtr = context.env.RootV;
 			}
 
 			// We go as far up the struct tree as possible
@@ -441,10 +499,8 @@ namespace Tales {
 
 					levelType = levelFields->at(fieldIdx).type;
 
-					if (!Actions::CompileTimeOnly) {
-						MutableGEP[2] = ConstantFieldIndex(fieldIdx);
-						V = context.builder.CreateGEP(LevelPtr, MutableGEP);
-					}
+					MutableGEP[2] = ConstantFieldIndex(fieldIdx);
+					V = context.builder.CreateGEP(LevelPtr, MutableGEP);
 
 					if (level == lastLevel - 1)  // structs all the way up, fastest and simplest case
 						return Actions::OnStatic(node, context, levelType, V);
@@ -456,8 +512,7 @@ namespace Tales {
 						return Actions::OnInvalid(node, context);
 
 					levelFields = &levelFields->at(fieldIdx).type.structDecl->fields;
-					if (!Actions::CompileTimeOnly)
-						LevelPtr = context.builder.CreateLoad(V);
+					LevelPtr = context.builder.CreateLoad(V);
 				} else {
 					// The structure tree ended at this level so the compiler can't go any further,
 					// it's now up to the LLVM instructions to search for the pair, and create new
@@ -468,9 +523,6 @@ namespace Tales {
 		}
 
 		// At this point we know we've delved in the realm of dynamic values.
-
-		if (Actions::CompileTimeOnly)
-			return (*Actions::OnUnreachableBefore)(node, context);
 
 		GEPIndexList HeaderGEP(2, 0, 0);
 		LevelPtr = context.builder.CreateGEP(LevelPtr, HeaderGEP);
@@ -496,42 +548,7 @@ namespace Tales {
 					RemainingLevelsGV, RemainingLevels.size());
 	}
 
-	struct GetTypeOnIdentifier : public ActionsOnIdentifier<const Type&> {
-		typedef CodegenEnv ContextType;
-
-		inline static const Type& OnStatic(const Node* node,
-															CodegenContext& context, const Type& IdTy, llvm::Value* IdV) {
-			return IdTy;
-		}
-
-		inline static const Type& OnInvalid(const Node* node, CodegenContext& context) {
-			llvm::errs() << "Invalid identifier, expected children but mutable"
-							"is statically typed as a number/string/..\n";
-			return Type::DynamicValue;
-		}
-
-		// NOTE: should be optimized out.
-		inline static const Type& OnUnreachable(const Node* node, CodegenContext& context,
-															const Type& levelType, llvm::Value* LevelPtr,
-															llvm::Value* RemainingLevelsGV, size_t RemainingLevelsSize) {
-			return Type::DynamicValue;
-		}
-
-		inline static const Type& _OnUnreachableBefore(const Node* node, CodegenContext& context) {
-			return Type::DynamicValue;
-		}
-		static constexpr OnUnreachableBeforeFPtr OnUnreachableBefore	= &_OnUnreachableBefore;
-
-		static const bool CompileTimeOnly = true;
-	};
-
-	const Type& Identifier::RuntimeType(CodegenEnv& env) const {
-		return EmitActionOnIdentifier<GetTypeOnIdentifier>(*this, this, env);
-	}
-
 	struct GetValueOnIdentifier : public ActionsOnIdentifier<llvm::Value*> {
-		typedef CodegenContext ContextType;
-
 		inline static llvm::Value* OnStatic(const Node* node, CodegenContext& context,
 																					 const Type& IdTy, llvm::Value* IdV) {
 			return context.builder.CreateLoad(IdV);
@@ -572,10 +589,6 @@ namespace Tales {
 
 			llvm_unreachable("FIXME Identifier::Codegen");
 		}
-
-		static constexpr OnUnreachableBeforeFPtr OnUnreachableBefore	= nullptr;
-
-		static const bool CompileTimeOnly = false;
 	};
 
 	llvm::Value* Identifier::Codegen(CodegenContext& context) const {
@@ -1238,8 +1251,6 @@ namespace Tales {
 	}
 
 	struct AssignOnIdentifier : public ActionsOnIdentifier<llvm::Value*> {
-		typedef CodegenContext ContextType;
-		
 		inline static llvm::Value* OnStatic(const Node* node, CodegenContext& context,
 																					 const Type& IdTy, llvm::Value* IdV) {
 			const ObjectUniquePtr<Expression>& rhs = cast<Assignment>(node)->rhs;
@@ -1277,10 +1288,6 @@ namespace Tales {
 
 			llvm_unreachable("FIXME Assignment::Codegen");
 		}
-
-		static constexpr OnUnreachableBeforeFPtr OnUnreachableBefore	= nullptr;
-
-		static const bool CompileTimeOnly = false;
 	};
 
 	llvm::Value* Assignment::Codegen(CodegenContext& context) const {
