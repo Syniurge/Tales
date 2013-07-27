@@ -36,7 +36,7 @@ include_directories( ${CMAKE_CURRENT_BINARY_DIR} )
 set(TALESCLANG_EXECUTABLE "${CMAKE_BINARY_DIR}/tools/PH2Bitcode/TalesClang")
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/TalesRuntime.s"
 	COMMAND ${TALESCLANG_EXECUTABLE}
-	ARGS -S -emit-llvm -std=c11 -O3
+	ARGS -S -Xclang -emit-llvm -std=c11 -O3
 		-Xclang -input-constraint -Xclang "${CMAKE_CURRENT_SOURCE_DIR}"
 		-o "${CMAKE_CURRENT_BINARY_DIR}/TalesRuntime.s" TalesRuntime.c
 	DEPENDS TalesClang TalesRuntime.c TalesRuntime.h

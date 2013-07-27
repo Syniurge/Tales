@@ -431,11 +431,11 @@ namespace Tales {
 		typedef _ReturnType ReturnType;
 	};
 
-	// Lenghty function template that avoids duplicate code between Assignment::Codegen,
-	// Identifier::Codegen and Identifier::RuntimeType.
+	// Lenghty function template that avoids duplicate code between Assignment::Codegen
+	// and Identifier::Codegen.
 	// As said above C++ unfortunately doesn't make things simple.
-	// The Actions parameter must be a class containing static public functions
-	// and a function pointer constant, refer to examples afterwards.
+	// The Actions parameter must be a class containing three static public functions,
+	// refer to examples afterwards.
 	template <typename Actions>
 	typename Actions::ReturnType EmitActionOnIdentifier(const Identifier& id,
 															const Node* node, CodegenContext& context) {

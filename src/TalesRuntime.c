@@ -310,10 +310,49 @@ INLINE_INTERNAL struct __TalesTableHeader* __TalesNewPureTable() {
 	return t;
 }
 
+INLINE_INTERNAL bool __TalesRiseLevel(enum __TalesTypeIndex** levelTy,
+						union __TalesFPU** levelV, enum __TalesTypeIndex* getLevelTy, const char* expr) {
+	void* getLevel;
+
+	if (**levelTy == TYPEIDX_NIL) {
+		**levelTy = TYPEIDX_TABLE;
+		(*levelV)->p = __TalesNewPureTable();
+	}
+
+	switch(**levelTy) {
+		case TYPEIDX_NUMBER:
+		case TYPEIDX_STRING:
+		case TYPEIDX_BOOL:
+		case TYPEIDX_FUNCTION:
+			fprintf(stderr, "Invalid identifier, must go up but one of the levels "
+					"can't hold children");
+			return false;
+
+		case TYPEIDX_TABLE:
+			getLevel = __TalesTableGetLevel((*levelV)->p, expr, getLevelTy, true);
+			if (*getLevelTy != TYPEIDX_NIL) {
+				// a sfield was found
+				*levelTy = getLevelTy;
+				*levelV = getLevel;
+			} else {
+				// no sfield, it's a cpair's dv
+				struct __TalesDynamicValue* levelDV = (struct __TalesDynamicValue*) getLevel;
+
+				*levelTy = &levelDV->typeIdx;
+				*levelV = &levelDV->value;
+			}
+			return true;
+
+		default:
+			fprintf(stderr, "Unsupported yet."); // FIXME
+			return false;
+	}
+}
+
 // Once the compiler reaches a level without a sfield matching the LHS level, it cannot
 // know the LHS type in advance and make a simple Store statement, we need to look
 // for the LHS value location at runtime.
-void __TalesAssignRuntimeT(struct __TalesTableHeader* lastSLevel, const char** remLevels,
+INLINE void __TalesAssignRuntimeT(struct __TalesTableHeader* lastSLevel, const char** remLevels,
 													 unsigned int numRemLevels, union __TalesFPU rhs,
 													 enum __TalesTypeIndex rhsType) {
 	// Since the compiler just went through the spairs, we only look inside cpairs at this level
@@ -331,36 +370,8 @@ void __TalesAssignRuntimeT(struct __TalesTableHeader* lastSLevel, const char** r
 
 	for (unsigned int i = 1; i < numRemLevels; ++i) {
 		// If the pair was just allocated and we still need to go up, create a table
-		if (*levelTy == TYPEIDX_NIL) {
-			*levelTy = TYPEIDX_TABLE;
-			levelV->p = __TalesNewPureTable();
-		} else 	if (*levelTy == TYPEIDX_NUMBER || *levelTy == TYPEIDX_STRING
-				|| *levelTy == TYPEIDX_FUNCTION) {
-			fprintf(stderr, "Invalid identifier, must go up but one of the levels "
-					"can't hold children");
+		if (!__TalesRiseLevel(&levelTy, &levelV, &getLevelTy, remLevels[i]))
 			return;
-		}
-
-		if (*levelTy == TYPEIDX_TABLE) {
-			void* getLevel = __TalesTableGetLevel(levelV->p, remLevels[i], &getLevelTy, true);
-			if (getLevelTy != TYPEIDX_NIL) {
-				// a sfield was found
-				levelTy = &getLevelTy;
-				levelV = getLevel;
-			} else {
-				// no sfield, it's a cpair's dv
-				struct __TalesDynamicValue* levelDV = (struct __TalesDynamicValue*) getLevel;
-
-				levelTy = &levelDV->typeIdx;
-				levelV = &levelDV->value;
-			}
-		}
-		else {
-			return; // FIXME
-		}
-
-		if (i == (numRemLevels - 1))
-			break;
 	}
 
 	__TalesAssign(levelV, levelTy, (getLevelTy == TYPEIDX_NIL), rhs, rhsType);
