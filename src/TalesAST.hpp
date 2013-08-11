@@ -26,611 +26,612 @@
 #include <vector>
 #include <algorithm>
 
-#include <llvm/Support/Casting.h>
-#include <llvm/IR/Value.h>
-#include <llvm/IR/DerivedTypes.h>
+#include "llvm/Support/Casting.h"
+#include "llvm/IR/Value.h"
+#include "llvm/IR/DerivedTypes.h"
 
 #include "TalesRTTI.hpp"
 #include "TalesRuntime.h"
 
 namespace Tales {
-	using std::string;
-	using std::vector;
-	using std::map;
-	using std::move;
-	using std::pair;
+  using std::string;
+  using std::vector;
+  using std::map;
+  using std::move;
+  using std::pair;
 
-	using llvm::isa;
-	using llvm::cast;
-	using llvm::dyn_cast;
-	
-	struct ASTContext;
-	struct CodegenContext;
-	struct CodegenEnv;
+  using llvm::isa;
+  using llvm::cast;
+  using llvm::dyn_cast;
 
-	struct Type;
+  struct ASTContext;
+  struct CodegenContext;
+  struct CodegenEnv;
 
-	struct Node : public Base {
-		Node(ObjectKind K) : Base(K) {}
-		virtual llvm::Value* Codegen(CodegenContext& context) const = 0;
-	};
+  struct Type;
 
-	struct Expression : public Node {
-		Expression(ObjectKind K) : Node(K) {}
-		virtual const Type& RuntimeType(CodegenEnv& env) const = 0;
+  struct Node : public Base {
+    Node(ObjectKind K) : Base(K) {}
+    virtual llvm::Value* Codegen(CodegenContext& context) const = 0;
+  };
 
-		static bool classof(const Base *B) {
-			return B->getKind() >= ObjectKind::Expression
-					&& B->getKind() <= ObjectKind::BinaryOperation;
-		}
-	};
-	struct Statement : public Node {
-		Statement(ObjectKind K) : Node(K) {}
+  struct Expression : public Node {
+    Expression(ObjectKind K) : Node(K) {}
+    virtual const Type& RuntimeType(CodegenEnv& env) const = 0;
 
-		static bool classof(const Base *B) {
-			return B->getKind() >= ObjectKind::Statement
-					&& B->getKind() <= ObjectKind::IfElse;
-		}
-	};
-	typedef vector<ObjectUniquePtr<Expression>> ExpressionList;
-	typedef vector<ObjectUniquePtr<Statement>> StatementList;
-	
-	struct StructLike;
-	struct FunctionType;
-	
-	struct Type : public Base {
-		typedef __TalesTypeIndex Kind;
-		
-		const Kind kind = TYPEIDX_NIL;
-		const StructLike* structDecl = nullptr;
-		const FunctionType* funcType = nullptr;
-		
-		Type() : Base(ObjectKind::Type) {}
-		Type(Kind kind) : Base(ObjectKind::Type), kind(kind) {}
+    static bool classof(const Base *B) {
+      return B->getKind() >= ObjectKind::Expression
+          && B->getKind() <= ObjectKind::BinaryOperation;
+    }
+  };
+  struct Statement : public Node {
+    Statement(ObjectKind K) : Node(K) {}
+
+    static bool classof(const Base *B) {
+      return B->getKind() >= ObjectKind::Statement
+          && B->getKind() <= ObjectKind::IfElse;
+    }
+  };
+  typedef vector<ObjectUniquePtr<Expression>> ExpressionList;
+  typedef vector<ObjectUniquePtr<Statement>> StatementList;
+
+  struct StructLike;
+  struct FunctionType;
+
+  struct Type : public Base {
+    typedef __TalesTypeIndex Kind;
+
+    const Kind kind = TYPEIDX_NIL;
+    const StructLike* structDecl = nullptr;
+    const FunctionType* funcType = nullptr;
+
+    Type() : Base(ObjectKind::Type) {}
+    Type(Kind kind) : Base(ObjectKind::Type), kind(kind) {}
 
 // 		Type(ASTContext& ast, const string& className);
 
-		// Deduces the structDecl and funcType from the initial assignments of locals,
-		// table spairs, class fields
-		Type(Kind kind, const Expression* expr);
+    // Deduces the structDecl and funcType from the initial assignments of locals,
+    // table spairs, class fields
+    Type(Kind kind, const Expression* expr);
 
-		Type(Type&& o) noexcept = default;
+    Type(Type&& o) noexcept = default;
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::Type;
-		}
-		
-		operator __TalesTypeIndex() const { return kind; }
-		
-		llvm::Type* Typegen(CodegenContext& context) const;
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::Type;
+    }
 
-		static const Type DynamicValue;
-		static const Type Boolean;
-		static const Type Number;
-		static const Type String;
+    operator __TalesTypeIndex() const { return kind; }
 
-		// A reference type that can be reassigned.
-		// If I ever need more than one it could be put inside a template.
-		struct Ref {
-			const Type* type = nullptr;
+    llvm::Type* Typegen(CodegenContext& context) const;
 
-			Ref() {}
-			Ref(const Type& type) : type(&type) {}
+    static const Type DynamicValue;
+    static const Type Boolean;
+    static const Type Number;
+    static const Type String;
 
-			Ref& operator=(const Type& type) {
-				Ref::type = &type; return *this;
-			}
+    // A reference type that can be reassigned.
+    // If I ever need more than one it could be put inside a template.
+    struct Ref {
+      const Type* type = nullptr;
 
-			operator const Type&() const {
-				assert(type && "Null reference");
-				return *type;
-			}
+      Ref() {}
+      Ref(const Type& type) : type(&type) {}
 
-			operator __TalesTypeIndex() const {
-				assert(type && "Null reference");
-				return type->kind;
-			}
-		};
-	};
+      Ref& operator=(const Type& type) {
+        Ref::type = &type; return *this;
+      }
 
-	// The only boolean values are actually "true" and "false", the boolean type
-	// is internal the rest of the time.
-	struct Boolean : public Expression {
-		bool value = false;
+      operator const Type&() const {
+        assert(type && "Null reference");
+        return *type;
+      }
 
-		Boolean(bool value) : Expression(ObjectKind::Boolean), value(value) {}
+      operator __TalesTypeIndex() const {
+        assert(type && "Null reference");
+        return type->kind;
+      }
+    };
+  };
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::Boolean;
-		}
+  // The only boolean values are actually "true" and "false", the boolean type
+  // is internal the rest of the time.
+  struct Boolean : public Expression {
+    bool value = false;
 
-		llvm::Value* Codegen(CodegenContext& context) const;
-		const Type& RuntimeType(CodegenEnv& env) const {
-			return Type::Boolean;
-		}
-	};
+    Boolean(bool value) : Expression(ObjectKind::Boolean), value(value) {}
 
-	struct Number : public Expression {
-		__TalesNumber value = 0.0f;
-		
-		Number(__TalesNumber value) : Expression(ObjectKind::Number), value(value) {}
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::Boolean;
+    }
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::Number;
-		}
+    llvm::Value* Codegen(CodegenContext& context) const;
+    const Type& RuntimeType(CodegenEnv& env) const {
+      return Type::Boolean;
+    }
+  };
 
-		llvm::Value* Codegen(CodegenContext& context) const;
-		const Type& RuntimeType(CodegenEnv& env) const {
-			return Type::Number;
-		}
-	};
+  struct Number : public Expression {
+    __TalesNumber value = 0.0f;
 
-	struct String : public Expression {
-		string value;
-		
-		String(string&& value) : Expression(ObjectKind::String), value(value) {}
+    Number(__TalesNumber value) : Expression(ObjectKind::Number), value(value) {}
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::String;
-		}
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::Number;
+    }
 
-		llvm::Value* Codegen(CodegenContext& context) const;
-		const Type& RuntimeType(CodegenEnv& env) const {
-			return Type::String;
-		}
-	};
+    llvm::Value* Codegen(CodegenContext& context) const;
+    const Type& RuntimeType(CodegenEnv& env) const {
+      return Type::Number;
+    }
+  };
 
-	// An identifier is basically an array of expressions
-	// However string constants are a special case since the compiler
-	// may be able to find a corresponding structField.
-	struct Identifier : public Expression {
-		typedef vector<ObjectUniquePtr<Expression>> Levels;
-		Levels levels;
+  struct String : public Expression {
+    string value;
 
-		void EmplaceLevel(ObjectUniquePtr<Expression>&& level) {
-			levels.emplace_back(move(level));
-		}
+    String(string&& value) : Expression(ObjectKind::String), value(value) {}
 
-		Identifier(ObjectUniquePtr<Expression>&& firstLevel)
-				: Expression(ObjectKind::Identifier) {
-			EmplaceLevel(move(firstLevel));
-		}
-		Identifier(Identifier&& o) noexcept = default;
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::String;
+    }
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::Identifier;
-		}
+    llvm::Value* Codegen(CodegenContext& context) const;
+    const Type& RuntimeType(CodegenEnv& env) const {
+      return Type::String;
+    }
+  };
 
-		llvm::Value* Codegen(CodegenContext& context) const;
+  // An identifier is basically an array of expressions
+  // However string constants are a special case since the compiler
+  // may be able to find a corresponding structField.
+  struct Identifier : public Expression {
+    typedef vector<ObjectUniquePtr<Expression>> Levels;
+    Levels levels;
 
-		const Type& RuntimeType(CodegenEnv& env) const;
+    void EmplaceLevel(ObjectUniquePtr<Expression>&& level) {
+      levels.emplace_back(move(level));
+    }
 
-		// Emit an array alloca containing the remaining levels
-		llvm::Value* EmitArray(unsigned firstLevel) const;
+    Identifier(ObjectUniquePtr<Expression>&& firstLevel)
+        : Expression(ObjectKind::Identifier) {
+      EmplaceLevel(move(firstLevel));
+    }
+    Identifier(Identifier&& o) noexcept = default;
 
-		inline string FullPath() const {
-			string fullPath = "";
-			for (Levels::const_iterator level = levels.cbegin(), lend = levels.cend();
-					 level != lend; ++level) {
-				// TODO: pretty print of the AST
-				if (String* name = dyn_cast<String>(level->get()))
-					fullPath += name->value;
-				else
-					fullPath += "[FIXME]";
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::Identifier;
+    }
 
-				if (level != lend-1)
-					fullPath += ".";
-			}
-			return fullPath;
-		}
-	};
-	
-	// Class fields, table spairs, block locals or function arguments, aka all mutable values
-	// that are known at compilation time.
-	struct Mutable : public Base {
-		string name;
-		ObjectUniquePtr<Expression> initialAssignment;
-		Type type;
-		
-		Mutable(string&& name) : Base(ObjectKind::Mutable), name(move(name)) {}
-		Mutable(Type&& type, string&& name) : Base(ObjectKind::Mutable),
-				type(move(type)), name(move(name)) {}
-		Mutable(string&& name, ObjectUniquePtrHandle&& initialAssignment)
-				: Base(ObjectKind::Mutable), name(move(name)),
-				  initialAssignment(move(initialAssignment)) {}
-		Mutable(Type&& type, string&& name, ObjectUniquePtrHandle&& initialAssignment)
-				: Base(ObjectKind::Mutable), name(move(name)),
-				  initialAssignment(move(initialAssignment)), type(type.kind, Mutable::initialAssignment.get()) {}
-		Mutable(Mutable&& o) noexcept = default;
+    llvm::Value* Codegen(CodegenContext& context) const;
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::Mutable;
-		}
-	};
-	
-	struct LexicalContext : public vector<Mutable> { // a "lexical/semantic level"
+    const Type& RuntimeType(CodegenEnv& env) const;
+
+    // Emit an array alloca containing the remaining levels
+    llvm::Value* EmitArray(unsigned firstLevel) const;
+
+    inline string FullPath() const {
+      string fullPath = "";
+      for (Levels::const_iterator level = levels.cbegin(), lend = levels.cend();
+           level != lend; ++level) {
+        // TODO: pretty print of the AST
+        if (String* name = dyn_cast<String>(level->get()))
+          fullPath += name->value;
+        else
+          fullPath += "[FIXME]";
+
+        if (level != lend-1)
+          fullPath += ".";
+      }
+      return fullPath;
+    }
+  };
+
+  // Class fields, table spairs, block locals or function arguments, aka all mutable values
+  // that are known at compilation time.
+  struct Mutable : public Base {
+    string name;
+    ObjectUniquePtr<Expression> initialAssignment;
+    Type type;
+
+    Mutable(string&& name) : Base(ObjectKind::Mutable), name(move(name)) {}
+    Mutable(Type&& type, string&& name) : Base(ObjectKind::Mutable),
+        type(move(type)), name(move(name)) {}
+    Mutable(string&& name, ObjectUniquePtrHandle&& initialAssignment)
+        : Base(ObjectKind::Mutable), name(move(name)),
+          initialAssignment(move(initialAssignment)) {}
+    Mutable(Type&& type, string&& name, ObjectUniquePtrHandle&& initialAssignment)
+        : Base(ObjectKind::Mutable), name(move(name)),
+          initialAssignment(move(initialAssignment)), type(type.kind, Mutable::initialAssignment.get()) {}
+    Mutable(Mutable&& o) noexcept = default;
+
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::Mutable;
+    }
+  };
+
+  struct LexicalContext : public vector<Mutable> { // a "lexical/semantic level"
 // 		LexicalContext* parent;
 //
 // 		LexicalContext(LexicalContext* parent) : parent(parent) {}
-		LexicalContext() = default;
-		LexicalContext(LexicalContext&) = delete;
-		LexicalContext(LexicalContext&&) = default;
-		LexicalContext& operator=(LexicalContext&) = delete;
-		LexicalContext& operator=(LexicalContext&&) = default;
-	};
+    LexicalContext() = default;
+    LexicalContext(LexicalContext&) = delete;
+    LexicalContext(LexicalContext&&) = default;
+    LexicalContext& operator=(LexicalContext&) = delete;
+    LexicalContext& operator=(LexicalContext&&) = default;
+  };
 
-	struct FieldList : public LexicalContext, public Base {
-		typedef LexicalContext::size_type Index;
+  struct FieldList : public LexicalContext, public Base {
+    typedef LexicalContext::size_type Index;
 
-		FieldList() : Base(ObjectKind::FieldList) {}
-		FieldList(FieldList&& o) = default;
+    FieldList() : Base(ObjectKind::FieldList) {}
+    FieldList(FieldList&& o) = default;
 
-		// Generates the LLVM struct type following the header in tables and class instances
-		llvm::StructType* Typegen(CodegenContext& context) const;
-		
+    // Generates the LLVM struct type following the header in tables and class instances
+    llvm::StructType* Typegen(CodegenContext& context) const;
+
 // 		// Generates the LLVM IR instructions to initialize the fields, it has to be provided the pointer to the struct in memory (follows a table or class header)
 // 		llvm::Value* Codegen(CodegenContext& context) const;
-		
-		// Returns the right index for the GEP instruction
-		// It only looks for fields accessible at compile time.
-		bool FindFieldIndex(const string& fieldName, Index& fieldIndex) const {
-			for (fieldIndex = 0; fieldIndex < size(); ++fieldIndex)
-				if (at(fieldIndex).name == fieldName)
-					return true;
-			return false;
-		}
-		
-		FieldList& operator=(FieldList&&) = default;
-		FieldList& operator=(FieldList&) = delete; // a safeguard
-	};
-	
-	struct StructLike : public Expression {
-		FieldList fields; // a.k.a spairs in Tales' tables there are the fixed struct-like pairs,
-				// and the LUA-like pairs
 
-		StructLike(ObjectKind K) : Expression(K) {}
-		StructLike(ObjectKind K, FieldList&& fields) : Expression(K), fields(move(fields)) {}
+    // Returns the right index for the GEP instruction
+    // It only looks for fields accessible at compile time.
+    bool FindFieldIndex(const string& fieldName, Index& fieldIndex) const {
+      for (fieldIndex = 0; fieldIndex < size(); ++fieldIndex)
+        if (at(fieldIndex).name == fieldName)
+          return true;
+      return false;
+    }
 
-		static bool classof(const Base *B) {
-			return B->getKind() >= ObjectKind::Table
-					&& B->getKind() <= ObjectKind::ClassDeclaration;
-		}
-	};
-	
-	struct Table : public StructLike {
-		ExpressionList ipairs;
-		const Type type = Type(TYPEIDX_TABLE, this);
+    FieldList& operator=(FieldList&&) = default;
+    FieldList& operator=(FieldList&) = delete; // a safeguard
+  };
 
-		Table() : StructLike(ObjectKind::Table) {}
+  struct StructLike : public Expression {
+    FieldList fields; // a.k.a spairs in Tales' tables there are the fixed struct-like pairs,
+        // and the LUA-like pairs
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::Table;
-		}
-		
-		llvm::Value* Codegen(CodegenContext& context) const;
-		llvm::Type* Typegen(Tales::CodegenContext& context) const;
-		const Type& RuntimeType(CodegenEnv& env) const {
-			return type;
-		}
-	};
-	
-	struct ClassDeclaration : public StructLike {
-		const Type type = Type(TYPEIDX_CLASSINST, this);
+    StructLike(ObjectKind K) : Expression(K) {}
+    StructLike(ObjectKind K, FieldList&& fields) : Expression(K), fields(move(fields)) {}
 
-		ClassDeclaration(FieldList&& fields)
-				: StructLike(ObjectKind::ClassDeclaration, move(fields)) {}
+    static bool classof(const Base *B) {
+      return B->getKind() >= ObjectKind::Table
+          && B->getKind() <= ObjectKind::ClassDeclaration;
+    }
+  };
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::ClassDeclaration;
-		}
+  struct Table : public StructLike {
+    ExpressionList ipairs;
+    const Type type = Type(TYPEIDX_TABLE, this);
 
-		llvm::Value* Codegen(CodegenContext& context) const { return nullptr; }
-		llvm::StructType* Typegen(CodegenContext& context) const { return nullptr; }
+    Table() : StructLike(ObjectKind::Table) {}
 
-		const Type& RuntimeType(CodegenEnv& env) const {
-			return type;
-		}
-	};
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::Table;
+    }
 
-	enum class UnaryOperator {
-		NOT, NEG,
-	};
+    llvm::Value* Codegen(CodegenContext& context) const;
+    llvm::Type* Typegen(Tales::CodegenContext& context) const;
+    const Type& RuntimeType(CodegenEnv& env) const {
+      return type;
+    }
+  };
 
-	enum class BinaryOperator {
-		AND, OR,
-		EQ, NE, LT, LE, GT, GE,
-		PLUS, MINUS, MULT, DIV, MOD
-	};
+  struct ClassDeclaration : public StructLike {
+    const Type type = Type(TYPEIDX_CLASSINST, this);
 
-	struct UnaryOperation : public Expression {
-		const UnaryOperator op;
-		ObjectUniquePtr<Expression> s;
+    ClassDeclaration(FieldList&& fields)
+        : StructLike(ObjectKind::ClassDeclaration, move(fields)) {}
 
-		UnaryOperation(const UnaryOperator op, ObjectUniquePtrHandle&& s)
-			: Expression(ObjectKind::UnaryOperation),
-			  op(op), s(move(s)) {}
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::ClassDeclaration;
+    }
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::UnaryOperation;
-		}
+    llvm::Value* Codegen(CodegenContext& context) const { return nullptr; }
+    llvm::StructType* Typegen(CodegenContext& context) const { return nullptr; }
 
-		llvm::Value* Codegen(CodegenContext& context) const;
-		
-		const Type& RuntimeType(CodegenEnv& env) const {
-			switch(op) {
-				case UnaryOperator::NOT:
-					return Type::Boolean;
-				case UnaryOperator::NEG:
-					return Type::Number;
-			}
-		}
-	};
+    const Type& RuntimeType(CodegenEnv& env) const {
+      return type;
+    }
+  };
 
-	struct BinaryOperation : public Expression {
-		const BinaryOperator op;
-		ObjectUniquePtr<Expression> lhs;
-		ObjectUniquePtr<Expression> rhs;
-		
-		BinaryOperation(ObjectUniquePtrHandle&& lhs, const BinaryOperator op,
-										ObjectUniquePtrHandle&& rhs)
-			: Expression(ObjectKind::BinaryOperation),
-			  lhs(move(lhs)), rhs(move(rhs)), op(op) {}
+  enum class UnaryOperator {
+    NOT, NEG, LEN
+  };
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::BinaryOperation;
-		}
+  enum class BinaryOperator {
+    AND, OR,
+    EQ, NE, LT, LE, GT, GE,
+    PLUS, MINUS, MULT, DIV, MOD
+  };
 
-		llvm::Value* Codegen(CodegenContext& context) const;
+  struct UnaryOperation : public Expression {
+    const UnaryOperator op;
+    ObjectUniquePtr<Expression> s;
 
-		const Type& RuntimeType(CodegenEnv& env) const {
-			switch(op) {
-				case BinaryOperator::EQ:
-				case BinaryOperator::NE:
-				case BinaryOperator::LT:
-				case BinaryOperator::LE:
-				case BinaryOperator::GT:
-				case BinaryOperator::GE:
-				case BinaryOperator::AND:
-				case BinaryOperator::OR:
-					return Type::Boolean;
-				default:
-					return Type::Number;
-			}
-		}
-	};
+    UnaryOperation(const UnaryOperator op, ObjectUniquePtrHandle&& s)
+      : Expression(ObjectKind::UnaryOperation),
+        op(op), s(move(s)) {}
 
-	struct Block : public Statement {
-		typedef LexicalContext LocalList;
-		
-		LocalList locals;
-		StatementList statements;
-		
-		Block() : Statement(ObjectKind::Block) {}
-		Block(Block&& o) = default;
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::UnaryOperation;
+    }
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::Block;
-		}
+    llvm::Value* Codegen(CodegenContext& context) const;
 
-		llvm::Value* Codegen(CodegenContext& context) const;
-	};
+    const Type& RuntimeType(CodegenEnv& env) const {
+      switch(op) {
+        case UnaryOperator::NOT:
+          return Type::Boolean;
+        case UnaryOperator::NEG:
+        case UnaryOperator::LEN:
+          return Type::Number;
+      }
+    }
+  };
 
-	struct Assignment : public Statement {
-		Identifier lhs;
-		ObjectUniquePtr<Expression> rhs;
-		
-		Assignment(Identifier&& lhs, ObjectUniquePtrHandle&& rhs)
-			: Statement(ObjectKind::Assignment), lhs(move(lhs)), rhs(move(rhs)) {}
+  struct BinaryOperation : public Expression {
+    const BinaryOperator op;
+    ObjectUniquePtr<Expression> lhs;
+    ObjectUniquePtr<Expression> rhs;
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::Assignment;
-		}
+    BinaryOperation(ObjectUniquePtrHandle&& lhs, const BinaryOperator op,
+                    ObjectUniquePtrHandle&& rhs)
+      : Expression(ObjectKind::BinaryOperation),
+        lhs(move(lhs)), rhs(move(rhs)), op(op) {}
 
-		llvm::Value* Codegen(CodegenContext& context) const;
-	};
-	
-	struct Return : public Statement {
-		ObjectUniquePtr<Expression> returnExpr;
-		
-		Return(ObjectUniquePtrHandle&& returnExpr) : Statement(ObjectKind::Return),
-							returnExpr(move(returnExpr)) {
-			assert(Return::returnExpr);
-		}
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::BinaryOperation;
+    }
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::Return;
-		}
+    llvm::Value* Codegen(CodegenContext& context) const;
 
-		llvm::Value* Codegen(CodegenContext& context) const;
-	};
-	
-	// NOTE: Any reason why C++ doesn't support conditional class members in templates?
-	// There is an ugly way to do it using inheritance:
-	// http://stackoverflow.com/questions/12117912/add-remove-data-members-with-template-parameters
-	// http://stackoverflow.com/questions/15473643/c11-conditional-compilation-members
-	// but I'd still need to rewrite the entire Codegen function (Clang complains that
-	// the member doesn't exist)
-	struct IfElse : public Statement {
-		ObjectUniquePtr<Expression> cond;
-		ObjectUniquePtr<Block> then;
-		ObjectUniquePtr<Block> _else;
-		
-		IfElse(ObjectUniquePtr<Expression>&& cond, ObjectUniquePtr<Block>&& then)
-				: Statement(ObjectKind::IfElse), cond(move(cond)),
-				  then(move(then)) {
-			assert(IfElse::cond && IfElse::then);
-		}
-		IfElse(ObjectUniquePtr<Expression>&& cond, ObjectUniquePtr<Block>&& then,
-											ObjectUniquePtr<Block>&& _else)
-				: Statement(ObjectKind::IfElse), cond(move(cond)),
-				  then(move(then)), _else(move(_else)) {
-			assert(IfElse::cond && IfElse::then && IfElse::_else);
-		}
+    const Type& RuntimeType(CodegenEnv& env) const {
+      switch(op) {
+        case BinaryOperator::EQ:
+        case BinaryOperator::NE:
+        case BinaryOperator::LT:
+        case BinaryOperator::LE:
+        case BinaryOperator::GT:
+        case BinaryOperator::GE:
+        case BinaryOperator::AND:
+        case BinaryOperator::OR:
+          return Type::Boolean;
+        default:
+          return Type::Number;
+      }
+    }
+  };
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::IfElse;
-		}
+  struct Block : public Statement {
+    typedef LexicalContext LocalList;
 
-		llvm::Value *Codegen(CodegenContext& context) const;
-	};
+    LocalList locals;
+    StatementList statements;
 
-	template<bool isRepeat>
-	struct WhileRepeat : public Statement {
-		constexpr static ObjectKind kind() {
-			return isRepeat ? ObjectKind::While : ObjectKind::Repeat;
-		}
+    Block() : Statement(ObjectKind::Block) {}
+    Block(Block&& o) = default;
 
-		ObjectUniquePtr<Expression> cond;
-		ObjectUniquePtr<Block> _do;
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::Block;
+    }
 
-		WhileRepeat(ObjectUniquePtr<Expression>&& cond, ObjectUniquePtr<Block>&& _do)
-				: Statement(kind()), cond(move(cond)), _do(move(_do)) {
-			assert(WhileRepeat::cond && WhileRepeat::_do);
-		}
+    llvm::Value* Codegen(CodegenContext& context) const;
+  };
 
-		static bool classof(const Base *B) {
-			return B->getKind() == kind();
-		}
+  struct Assignment : public Statement {
+    Identifier lhs;
+    ObjectUniquePtr<Expression> rhs;
 
-		llvm::Value *Codegen(CodegenContext& context) const;
-	};
-	typedef WhileRepeat<false> While;
-	typedef WhileRepeat<true> Repeat;
+    Assignment(Identifier&& lhs, ObjectUniquePtrHandle&& rhs)
+      : Statement(ObjectKind::Assignment), lhs(move(lhs)), rhs(move(rhs)) {}
 
-	struct For : public Statement {
-		Identifier var;
-		ObjectUniquePtr<Expression> init, limit, step;
-		ObjectUniquePtr<Block> _do;
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::Assignment;
+    }
 
-		For(Identifier&& var, ObjectUniquePtr<Expression>&& init,
-						ObjectUniquePtr<Expression>&& limit, ObjectUniquePtr<Block>&& _do,
-						ObjectUniquePtr<Expression>&& step = new Number(1.0))
-				: Statement(ObjectKind::For), var(move(var)), init(move(init)),
-				  limit(move(limit)), step(move(step)), _do(move(_do)) {
-			assert(For::init && For::limit && For::step && For::_do);
-		}
+    llvm::Value* Codegen(CodegenContext& context) const;
+  };
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::For;
-		}
+  struct Return : public Statement {
+    ObjectUniquePtr<Expression> returnExpr;
 
-		llvm::Value *Codegen(CodegenContext& context) const;
-	};
+    Return(ObjectUniquePtrHandle&& returnExpr) : Statement(ObjectKind::Return),
+              returnExpr(move(returnExpr)) {
+      assert(Return::returnExpr);
+    }
 
-	struct ArgumentList : public LexicalContext, public Base {
-		ArgumentList() : Base(ObjectKind::ArgumentList) {}
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::Return;
+    }
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::ArgumentList;
-		}
-	};
+    llvm::Value* Codegen(CodegenContext& context) const;
+  };
 
-	struct FunctionType {
-		Type rtype;
-		ArgumentList args;
-		
-		FunctionType() : args() {}
-		FunctionType(ArgumentList&& args) : args(move(args)) {}
-		FunctionType(Type&& rtype, ArgumentList&& args) : rtype(move(rtype)),
-				args(move(args)) {}
+  // NOTE: Any reason why C++ doesn't support conditional class members in templates?
+  // There is an ugly way to do it using inheritance:
+  // http://stackoverflow.com/questions/12117912/add-remove-data-members-with-template-parameters
+  // http://stackoverflow.com/questions/15473643/c11-conditional-compilation-members
+  // but I'd still need to rewrite the entire Codegen function (Clang complains that
+  // the member doesn't exist)
+  struct IfElse : public Statement {
+    ObjectUniquePtr<Expression> cond;
+    ObjectUniquePtr<Block> then;
+    ObjectUniquePtr<Block> _else;
 
-		llvm::FunctionType* Typegen(CodegenContext& context) const;
-	};
+    IfElse(ObjectUniquePtr<Expression>&& cond, ObjectUniquePtr<Block>&& then)
+        : Statement(ObjectKind::IfElse), cond(move(cond)),
+          then(move(then)) {
+      assert(IfElse::cond && IfElse::then);
+    }
+    IfElse(ObjectUniquePtr<Expression>&& cond, ObjectUniquePtr<Block>&& then,
+                      ObjectUniquePtr<Block>&& _else)
+        : Statement(ObjectKind::IfElse), cond(move(cond)),
+          then(move(then)), _else(move(_else)) {
+      assert(IfElse::cond && IfElse::then && IfElse::_else);
+    }
 
-	struct FunctionDeclaration : public Expression {
-		string debugName;
-		
-		FunctionType ftype;
-		Block block;
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::IfElse;
+    }
 
-		const Type type = Type(TYPEIDX_FUNCTION, this);
-		
-		FunctionDeclaration(Block&& block, const string debugName = "")
-				: Expression(ObjectKind::FunctionDeclaration), block(move(block)),
-								debugName(debugName) {}
-		FunctionDeclaration(ArgumentList&& args, Block&& block,
-												const string debugName = "")
-				: Expression(ObjectKind::FunctionDeclaration), ftype(move(args)),
-								block(move(block)), debugName(debugName) {}
-		FunctionDeclaration(Type&& type, ArgumentList&& args,
-												Block&& block, const string debugName = "")
-				: Expression(ObjectKind::FunctionDeclaration), ftype(move(type), move(args)),
-								block(move(block)), debugName(debugName) {}
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::FunctionDeclaration;
-		}
+    llvm::Value *Codegen(CodegenContext& context) const;
+  };
 
-		// Called by Codegen to generate the "strongly typed" function
-		llvm::Function* CodegenFunc(CodegenContext& context) const;
-		llvm::Value* Codegen(CodegenContext& context) const;
+  template<bool isRepeat>
+  struct WhileRepeat : public Statement {
+    constexpr static ObjectKind kind() {
+      return isRepeat ? ObjectKind::While : ObjectKind::Repeat;
+    }
 
-		const Type& RuntimeType(CodegenEnv& env) const {
-			return type;
-		}
-	};
+    ObjectUniquePtr<Expression> cond;
+    ObjectUniquePtr<Block> _do;
 
-	struct CallArgumentList : public ExpressionList, public Base {
-		CallArgumentList() : Base(ObjectKind::CallArgumentList) {}
+    WhileRepeat(ObjectUniquePtr<Expression>&& cond, ObjectUniquePtr<Block>&& _do)
+        : Statement(kind()), cond(move(cond)), _do(move(_do)) {
+      assert(WhileRepeat::cond && WhileRepeat::_do);
+    }
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::CallArgumentList;
-		}
-	};
+    static bool classof(const Base *B) {
+      return B->getKind() == kind();
+    }
 
-	// NOTE: multiple inheritance poses problems with LLVM RTTI, hence
-	// the split of FunctionCall into two very similar classes.
+    llvm::Value *Codegen(CodegenContext& context) const;
+  };
+  typedef WhileRepeat<false> While;
+  typedef WhileRepeat<true> Repeat;
 
-	struct FunctionCall {
-		Identifier funcId;
-		CallArgumentList callArgs;
-		
-		FunctionCall(Identifier&& funcId, CallArgumentList&& callArgs)
-				: funcId(move(funcId)), callArgs(move(callArgs)) {}
+  struct For : public Statement {
+    Identifier var;
+    ObjectUniquePtr<Expression> init, limit, step;
+    ObjectUniquePtr<Block> _do;
 
-		llvm::Value* Codegen(CodegenContext& context) const;
-	};
+    For(Identifier&& var, ObjectUniquePtr<Expression>&& init,
+            ObjectUniquePtr<Expression>&& limit, ObjectUniquePtr<Block>&& _do,
+            ObjectUniquePtr<Expression>&& step = new Number(1.0))
+        : Statement(ObjectKind::For), var(move(var)), init(move(init)),
+          limit(move(limit)), step(move(step)), _do(move(_do)) {
+      assert(For::init && For::limit && For::step && For::_do);
+    }
 
-	struct FunctionCallExpr : public FunctionCall, public Expression {
-		FunctionCallExpr(Identifier&& funcId, CallArgumentList&& callArgs)
-				: Expression(ObjectKind::FunctionCallExpr),
-					FunctionCall(move(funcId), move(callArgs)) {}
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::For;
+    }
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::FunctionCallExpr;
-		}
+    llvm::Value *Codegen(CodegenContext& context) const;
+  };
 
-		llvm::Value* Codegen(CodegenContext& context) const {
-			return FunctionCall::Codegen(context);
-		}
+  struct ArgumentList : public LexicalContext, public Base {
+    ArgumentList() : Base(ObjectKind::ArgumentList) {}
 
-		const Type& RuntimeType(CodegenEnv& env) const {
-			// Function return type if sfield (reachable), determined from
-			// the prototype header at runtime otherwise.
-			return funcId.RuntimeType(env);
-		}
-	};
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::ArgumentList;
+    }
+  };
 
-	struct FunctionCallStmt : public FunctionCall, public Statement {
-		FunctionCallStmt(Identifier&& funcId, CallArgumentList&& callArgs)
-				: Statement(ObjectKind::FunctionCallStmt),
-					FunctionCall(move(funcId), move(callArgs)) {}
+  struct FunctionType {
+    Type rtype;
+    ArgumentList args;
 
-		static bool classof(const Base *B) {
-			return B->getKind() == ObjectKind::FunctionCallStmt;
-		}
+    FunctionType() : args() {}
+    FunctionType(ArgumentList&& args) : args(move(args)) {}
+    FunctionType(Type&& rtype, ArgumentList&& args) : rtype(move(rtype)),
+        args(move(args)) {}
 
-		llvm::Value* Codegen(CodegenContext& context) const {
-			return FunctionCall::Codegen(context);
-		}
-	};
-	
-	struct ASTContext {
-		map<string, ClassDeclaration*> classMap;
-		
-		ObjectUniquePtr<Table> root;  // will be initialized as an empty table by the parser if nullptr
-		ObjectUniquePtr<FunctionDeclaration> parsedChunk;
-		
-		ASTContext() {}
-		ASTContext(ObjectUniquePtrHandle&& root) : root(move(root)) {}
-	};
+    llvm::FunctionType* Typegen(CodegenContext& context) const;
+  };
+
+  struct FunctionDeclaration : public Expression {
+    string debugName;
+
+    FunctionType ftype;
+    Block block;
+
+    const Type type = Type(TYPEIDX_FUNCTION, this);
+
+    FunctionDeclaration(Block&& block, const string debugName = "")
+        : Expression(ObjectKind::FunctionDeclaration), block(move(block)),
+                debugName(debugName) {}
+    FunctionDeclaration(ArgumentList&& args, Block&& block,
+                        const string debugName = "")
+        : Expression(ObjectKind::FunctionDeclaration), ftype(move(args)),
+                block(move(block)), debugName(debugName) {}
+    FunctionDeclaration(Type&& type, ArgumentList&& args,
+                        Block&& block, const string debugName = "")
+        : Expression(ObjectKind::FunctionDeclaration), ftype(move(type), move(args)),
+                block(move(block)), debugName(debugName) {}
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::FunctionDeclaration;
+    }
+
+    // Called by Codegen to generate the "strongly typed" function
+    llvm::Function* CodegenFunc(CodegenContext& context) const;
+    llvm::Value* Codegen(CodegenContext& context) const;
+
+    const Type& RuntimeType(CodegenEnv& env) const {
+      return type;
+    }
+  };
+
+  struct CallArgumentList : public ExpressionList, public Base {
+    CallArgumentList() : Base(ObjectKind::CallArgumentList) {}
+
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::CallArgumentList;
+    }
+  };
+
+  // NOTE: multiple inheritance poses problems with LLVM RTTI, hence
+  // the split of FunctionCall into two very similar classes.
+
+  struct FunctionCall {
+    Identifier funcId;
+    CallArgumentList callArgs;
+
+    FunctionCall(Identifier&& funcId, CallArgumentList&& callArgs)
+        : funcId(move(funcId)), callArgs(move(callArgs)) {}
+
+    llvm::Value* Codegen(CodegenContext& context) const;
+  };
+
+  struct FunctionCallExpr : public FunctionCall, public Expression {
+    FunctionCallExpr(Identifier&& funcId, CallArgumentList&& callArgs)
+        : Expression(ObjectKind::FunctionCallExpr),
+          FunctionCall(move(funcId), move(callArgs)) {}
+
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::FunctionCallExpr;
+    }
+
+    llvm::Value* Codegen(CodegenContext& context) const {
+      return FunctionCall::Codegen(context);
+    }
+
+    const Type& RuntimeType(CodegenEnv& env) const {
+      // Function return type if sfield (reachable), determined from
+      // the prototype header at runtime otherwise.
+      return funcId.RuntimeType(env);
+    }
+  };
+
+  struct FunctionCallStmt : public FunctionCall, public Statement {
+    FunctionCallStmt(Identifier&& funcId, CallArgumentList&& callArgs)
+        : Statement(ObjectKind::FunctionCallStmt),
+          FunctionCall(move(funcId), move(callArgs)) {}
+
+    static bool classof(const Base *B) {
+      return B->getKind() == ObjectKind::FunctionCallStmt;
+    }
+
+    llvm::Value* Codegen(CodegenContext& context) const {
+      return FunctionCall::Codegen(context);
+    }
+  };
+
+  struct ASTContext {
+    map<string, ClassDeclaration*> classMap;
+
+    ObjectUniquePtr<Table> root;  // will be initialized as an empty table by the parser if nullptr
+    ObjectUniquePtr<FunctionDeclaration> parsedChunk;
+
+    ASTContext() {}
+    ASTContext(ObjectUniquePtrHandle&& root) : root(move(root)) {}
+  };
 }

@@ -83,6 +83,7 @@ table               return Parser::TABLETYPE;
 
 "." |
 "," |
+"#" |
 "+" |
 "-" |
 "*" |

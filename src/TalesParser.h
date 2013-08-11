@@ -42,8 +42,8 @@ class Parser: public ParserBase
     public:
         int parse();
         Parser(ASTContext& context, std::istream &in = std::cin,
-								std::ostream &out = std::cout)
-						: context(context), d_scanner(d_val__, in, out) {}
+                std::ostream &out = std::cout)
+            : context(context), d_scanner(d_val__, in, out) {}
 
     private:
         void error(char const *msg);    // called on (syntax) errors

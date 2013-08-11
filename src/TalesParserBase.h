@@ -21,9 +21,9 @@ $insert namespace-open
 
 typedef ObjectKind Tag__;
 
-		// NOTE: insert polymorphic defines Tag__ and no way to tell bisonc++
-		// not to do that without altering its code (maybe later).
-		// So for now we manually copy paste the code through CMakeLists.txt
+    // NOTE: insert polymorphic defines Tag__ and no way to tell bisonc++
+    // not to do that without altering its code (maybe later).
+    // So for now we manually copy paste the code through CMakeLists.txt
 ///@includepolymorphic
 
 class \@Base
@@ -58,7 +58,7 @@ $insert LTYPEstack
         int         d_nextToken__;
         size_t      d_state__;
         STYPE__    *d_vsp__;
-				STYPE__     d_val__;
+        STYPE__     d_val__;
         STYPE__    d_nextVal__;
 $insert LTYPEdata
 

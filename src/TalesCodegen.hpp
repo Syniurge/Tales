@@ -40,150 +40,150 @@
 #include "llvm/Support/raw_ostream.h"
 
 namespace Tales {
-	using std::stack;
-	using std::pair;
-	using std::unique_ptr;
+  using std::stack;
+  using std::pair;
+  using std::unique_ptr;
 
-	using llvm::StringRef;
+  using llvm::StringRef;
 
-	struct RuntimeModule {
-		llvm::Module* module;
-		llvm::SMDiagnostic smDiag;
+  struct RuntimeModule {
+    llvm::Module* module;
+    llvm::SMDiagnostic smDiag;
 
-		// LLVM Struct types retrieved after parsing TalesRuntime.c IR
-		llvm::StructType* FPUT;
-		llvm::StructType* DynamicValueT;
-		llvm::StructType* ChainPairT;
-		llvm::StructType* StructFieldT;
-		llvm::StructType* TableHeaderT;
-		llvm::StructType* FunctionValueT;
+    // LLVM Struct types retrieved after parsing TalesRuntime.c IR
+    llvm::StructType* FPUT;
+    llvm::StructType* DynamicValueT;
+    llvm::StructType* ChainPairT;
+    llvm::StructType* StructFieldT;
+    llvm::StructType* TableHeaderT;
+    llvm::StructType* FunctionValueT;
 
-		llvm::IntegerType* TypeIndexT;
-		llvm::Type* NumberT;
+    llvm::IntegerType* TypeIndexT;
+    llvm::Type* NumberT;
 
-		// LLVM Functions from TalesRuntime.c IR, most of them are inlined
+    // LLVM Functions from TalesRuntime.c IR, most of them are inlined
 
-		llvm::Function* EmptySF;
-		llvm::Function* EmptyTF;
+    llvm::Function* EmptySF;
+    llvm::Function* EmptyTF;
 
-		llvm::Function* NtoSF;
-		llvm::Function* BtoNF;
-		llvm::Function* BtoSF;
-		llvm::Function* DVtoNF;
-		llvm::Function* DVtoSF;
-		llvm::Function* DVtoBF;
-		llvm::Function* DVtoPF;
+    llvm::Function* NtoSF;
+    llvm::Function* BtoNF;
+    llvm::Function* BtoSF;
+    llvm::Function* DVtoNF;
+    llvm::Function* DVtoSF;
+    llvm::Function* DVtoBF;
+    llvm::Function* DVtoPF;
 
-		llvm::Function* AssignRuntimeTF;
-		llvm::Function* GetTF;
-		llvm::Function* FunctionTypecheckF;
+    llvm::Function* AssignRuntimeTF;
+    llvm::Function* GetTF;
+    llvm::Function* FunctionTypecheckF;
 
-		llvm::Function* MallocF;
-		llvm::Function* AtofF;
-		llvm::Function* AtoiF;
-		llvm::Function* AtolF;
-		llvm::Function* StrdupF;
+    llvm::Function* MallocF;
+    llvm::Function* AtofF;
+    llvm::Function* AtoiF;
+    llvm::Function* AtolF;
+    llvm::Function* StrdupF;
 
-		llvm::PassManager pm;
+    llvm::PassManager pm;
 
-	private:
-		bool _Load();
-		RuntimeModule() {}
+  private:
+    bool _Load();
+    RuntimeModule() {}
 
-		inline llvm::StructType* getTypeByName(StringRef Name) {
-			llvm::StructType* result = module->getTypeByName(Name);
-			assert(result && "RuntimeModule::getTypeByName failed!");
+    inline llvm::StructType* getTypeByName(StringRef Name) {
+      llvm::StructType* result = module->getTypeByName(Name);
+      assert(result && "RuntimeModule::getTypeByName failed!");
 
-			return result;
-		}
+      return result;
+    }
 
-		inline llvm::Function* getFunction(StringRef Name) {
-			llvm::Function* result = module->getFunction(Name);
-			assert(result && "RuntimeModule::getFunction failed!");
+    inline llvm::Function* getFunction(StringRef Name) {
+      llvm::Function* result = module->getFunction(Name);
+      assert(result && "RuntimeModule::getFunction failed!");
 
-			return result;
-		}
+      return result;
+    }
 
-	public:
-		static RuntimeModule* Load() {
-			RuntimeModule* talesModule = new RuntimeModule;
+  public:
+    static RuntimeModule* Load() {
+      RuntimeModule* talesModule = new RuntimeModule;
 
-			if (!talesModule->_Load()) {
-				delete talesModule;
-				return nullptr;
-			}
+      if (!talesModule->_Load()) {
+        delete talesModule;
+        return nullptr;
+      }
 
-			return talesModule;
-		}
-	};
+      return talesModule;
+    }
+  };
 
-	struct SemanticLevel { // or is it lexical? it never sticks..
-		const SemanticLevel* parent;
+  struct SemanticLevel { // or is it lexical? it never sticks..
+    const SemanticLevel* parent;
 
-		const LexicalContext& mutables;
-		vector<llvm::Value*>& MutablesV;
+    const LexicalContext& mutables;
+    vector<llvm::Value*>& MutablesV;
 
-		SemanticLevel(const LexicalContext& mutables,
-									vector<llvm::Value*>& MutablesV,
-									const SemanticLevel* parent)
-				: mutables(mutables), MutablesV(MutablesV), parent(parent) {}
-		SemanticLevel(SemanticLevel &&o) noexcept = default;
-	};
+    SemanticLevel(const LexicalContext& mutables,
+                  vector<llvm::Value*>& MutablesV,
+                  const SemanticLevel* parent)
+        : mutables(mutables), MutablesV(MutablesV), parent(parent) {}
+    SemanticLevel(SemanticLevel &&o) noexcept = default;
+  };
 
-	struct SemanticStack : public stack<unique_ptr<SemanticLevel>> {
-		void emplace(const LexicalContext& mutables,
-								 vector<llvm::Value*>& MutablesV) {
-			stack<unique_ptr<SemanticLevel>>::emplace
-				( new SemanticLevel(mutables, MutablesV,
-													empty() ? nullptr : top().get()) );
-		}
+  struct SemanticStack : public stack<unique_ptr<SemanticLevel>> {
+    void emplace(const LexicalContext& mutables,
+                 vector<llvm::Value*>& MutablesV) {
+      stack<unique_ptr<SemanticLevel>>::emplace
+        ( new SemanticLevel(mutables, MutablesV,
+                          empty() ? nullptr : top().get()) );
+    }
 
-		pair<const Mutable*, llvm::Value*> FindMutable(const string& name) {
-			if (empty()) return pair<const Mutable*, llvm::Value*>(nullptr, nullptr);
+    pair<const Mutable*, llvm::Value*> FindMutable(const string& name) {
+      if (empty()) return pair<const Mutable*, llvm::Value*>(nullptr, nullptr);
 
-			const SemanticLevel* sLevel = top().get();
-			do {
-				for (LexicalContext::const_iterator m = sLevel->mutables.cbegin(),
-								ml = sLevel->mutables.cend(); m != ml; ++m) {
-					if (m->name == name)
-						return pair<const Mutable*, llvm::Value*>
-							(&(*m), sLevel->MutablesV[m - sLevel->mutables.cbegin()]);
-						// WARNING: I found the &(*const_iterator) trick on stackoverflow, kinda scary
-				}
-				sLevel = sLevel->parent;
-			} while (sLevel != nullptr);
+      const SemanticLevel* sLevel = top().get();
+      do {
+        for (LexicalContext::const_iterator m = sLevel->mutables.cbegin(),
+                ml = sLevel->mutables.cend(); m != ml; ++m) {
+          if (m->name == name)
+            return pair<const Mutable*, llvm::Value*>
+              (&(*m), sLevel->MutablesV[m - sLevel->mutables.cbegin()]);
+            // WARNING: I found the &(*const_iterator) trick on stackoverflow, kinda scary
+        }
+        sLevel = sLevel->parent;
+      } while (sLevel != nullptr);
 
-			// No local/upvalue/argument/class field was found
-			return pair<const Mutable*, llvm::Value*>(nullptr, nullptr);
-		}
-	};
+      // No local/upvalue/argument/class field was found
+      return pair<const Mutable*, llvm::Value*>(nullptr, nullptr);
+    }
+  };
 
-	// As with Lua, be aware that the compilation of a function varies with the root table
-	// NOTE FIXME: but the upvalues/fields/... are always the same, so maybe they
-	// shouldn't be at codegen time but at parsing time.
-	struct CodegenEnv {
-		const Table* root;
-		llvm::Value* RootV;
+  // As with Lua, be aware that the compilation of a function varies with the root table
+  // NOTE FIXME: but the upvalues/fields/... are always the same, so maybe they
+  // shouldn't be at codegen time but at parsing time.
+  struct CodegenEnv {
+    const Table* root;
+    llvm::Value* RootV;
 
-		SemanticStack semanticStack;
+    SemanticStack semanticStack;
 
-		CodegenEnv() : RootV(nullptr) {}
-	};
+    CodegenEnv() : RootV(nullptr) {}
+  };
 
-	struct CodegenContext {
-		RuntimeModule& runtimeModule;
+  struct CodegenContext {
+    RuntimeModule& runtimeModule;
 
-		llvm::IRBuilder<> builder;
-		llvm::FunctionPassManager fpm;
-		llvm::ExecutionEngine* execEngine;
-		const llvm::DataLayout& dataLayout;
+    llvm::IRBuilder<> builder;
+    llvm::FunctionPassManager fpm;
+    llvm::ExecutionEngine* execEngine;
+    const llvm::DataLayout& dataLayout;
 
-		CodegenEnv env;
+    CodegenEnv env;
 
-		stack<const FunctionDeclaration*> funcStack;
+    stack<const FunctionDeclaration*> funcStack;
 
-		CodegenContext(RuntimeModule& talesModule,
-									llvm::ExecutionEngine* execEngine);
-	};
+    CodegenContext(RuntimeModule& talesModule,
+                  llvm::ExecutionEngine* execEngine);
+  };
 }
 

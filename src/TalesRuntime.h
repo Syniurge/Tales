@@ -22,22 +22,22 @@
 typedef float __TalesNumber;
 
 #define NUM2STR_DIGITS 7
-		// Lua uses 12, NOTE: look up (again) how many digits before the truncated value isn't exact anymore
+    // Lua uses 12, NOTE: look up (again) how many digits before the truncated value isn't exact anymore
 
 // Macro arcanes beyond my mere mortal comprehension
 #define STR_EXPAND(tok) #tok
 #define STR(tok) STR_EXPAND(tok)
  
 enum __TalesTypeIndex {
-	TYPEIDX_NIL = 0,  // Undefined or dynamic value, depending on the context
+  TYPEIDX_NIL = 0,  // Undefined or dynamic value, depending on the context
 // 	TYPEIDX_DVALUE,
-	TYPEIDX_NUMBER,
-	TYPEIDX_STRING,
+  TYPEIDX_NUMBER,
+  TYPEIDX_STRING,
   TYPEIDX_TABLE,
   TYPEIDX_CLASSINST,
-	TYPEIDX_FUNCTION,
-	TYPEIDX_BOOL   // Only used internally to avoid unnecessary bool->float conversions
-	// Followed by the declared classes
+  TYPEIDX_FUNCTION,
+  TYPEIDX_BOOL   // Only used internally to avoid unnecessary bool->float conversions
+  // Followed by the declared classes
 };
 
 #endif

@@ -37,13 +37,13 @@ class Scanner: public ScannerBase
 {
     public:
         explicit Scanner(ParserBase::STYPE__ &d_val,
-																std::istream &in = std::cin,
+                                std::istream &in = std::cin,
                                 std::ostream &out = std::cout);
 
         Scanner(ParserBase::STYPE__ &d_val,
-									std::string const &infile,
-									std::string const &outfile);
-        
+                  std::string const &infile,
+                  std::string const &outfile);
+
         // $insert lexFunctionDecl
         int lex();
 
