@@ -16,10 +16,10 @@ I wish I had devoted more time to Tales and its related project, Crucible. The r
 
 Most of the syntax remains compatible with Lua, but it offers the possibility to statically specify types, and to create structure types, which should allow Tales to reach the speed of compiled languages such as C#. The idea is that a novice programmer whose main goal is to tell a story (Crucible is meant to be a spiritual successor to Neverwinter Nights) doesn't have to worry about types at all, but if the performance hit begins to be felt, he will already be fairly acquainted with programming and can simply learn to add the right keywords and class declarations instead of using tables of dynamic values to improve the performance. But overall the language has to remain simple enough so that any piece of code isn't too arcane, so that the code of any module in Neverwinter Nights' terms is easy to understand to other module makers. And for an experienced programmer, one reason to want a statically-typed language is to not have a second thought about implementing the entire game logic in Tales, such as procedural animation, RTS AI, etc., which may be too much for Lua to handle (every time it has to lookup a non-local variable, Lua skims through chains of table pairs and may have to compare hundreds of keys).
 
-Granted, there is LuaJIT which uses a number of techniques to guess in advance the types of Lua objects, and even runtime monitoring techniques to spot possible optimizations and to recompile some functions accordingly. But LuaJIT still is so complex that it'd be extremely hard to add new features to the Lua language (see the time it took to implement the changes brought by Lua 5.2). Tales should be much less obscure in its workings. It relies on LLVM which already allows a pretty good level of optimization and makes Tales' code platform-agnostic. Keeping the coee clear will come in handy when I'll be implementing the planned game networking features, such as universal client-side prediction, which I could never have done with LuaJIT.
+Granted, there is LuaJIT which uses a number of techniques to guess in advance the types of Lua objects, and even runtime monitoring techniques to spot possible optimizations and to recompile some functions accordingly. But LuaJIT still is so complex that it'd be extremely hard to add new features to the Lua language (see the time it took to implement the changes brought by Lua 5.2). Tales' workings should be much less obscure. It relies on LLVM which already allows a pretty good level of optimization and makes Tales' code platform-agnostic. Keeping the code clear will come in handy when I'll be implementing the planned game networking features, such as universal client-side prediction, which I could never have done with LuaJIT.
 
 Build
-======
+------------
 
 You can already test Tales through its simple evaluator, Scheherazade:
 
@@ -32,7 +32,7 @@ Note that Tales requires uncommon third-parties such as Bisonc++, Flexc++ and li
 A testing function talesprint(value) is available in Scheherazade.
 
 Language
-=========
+------------
 
 A proper language documentation will be written later, but the two most important currently implemented specific additions to Lua to be aware of are:
 
@@ -49,7 +49,7 @@ A proper language documentation will be written later, but the two most importan
         table t = { number n, string message = "Oh wow!", function printN(table t) talesprint(t.n) talesprint("\n") talesprint(t.message) end }
         t = {}
 
-  is forbidden (for now, I'm trying to devise a more elegant solution). If you want to create a pure dynamic table, you should write:
+  is forbidden (for now, I'm trying to devise a more elegant solution). If you wish to create a pure dynamic table, you should write:
 
         table t = { n = 0, message = "Oh wow!" }
         t.printN = function (table t) talesprint(t.n) talesprint("\n") talesprint(t.message) end
